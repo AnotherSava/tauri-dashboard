@@ -1,8 +1,14 @@
+use crate::config::{Config, ConfigState};
 use crate::state::{AgentSession, AppState};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 #[tauri::command]
 pub fn get_sessions(state: State<AppState>) -> Vec<AgentSession> {
+    state.snapshot()
+}
+
+#[tauri::command]
+pub fn get_config(state: State<ConfigState>) -> Config {
     state.snapshot()
 }
 
@@ -44,5 +50,11 @@ pub fn now_ms() -> i64 {
 pub fn emit_sessions_updated(app: &AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
         let _ = app.emit("sessions_updated", state.snapshot());
+    }
+}
+
+pub fn emit_config_updated(app: &AppHandle) {
+    if let Some(state) = app.try_state::<ConfigState>() {
+        let _ = app.emit("config_updated", state.snapshot());
     }
 }

@@ -8,10 +8,10 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 use tauri::{AppHandle, Manager};
 
-use crate::commands::{emit_sessions_updated, now_ms};
+use crate::commands::{emit_config_updated, emit_sessions_updated, now_ms};
+use crate::config::{Config, ConfigState};
+use crate::config_watcher::apply_config_to_window;
 use crate::state::{AppState, SetInput, Status};
-
-pub const DEFAULT_PORT: u16 = 9077;
 
 pub async fn run(app: AppHandle, port: u16) {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -64,6 +64,34 @@ struct ClearPayload {
     id: String,
 }
 
+/// Merge a JSON patch (the body of a `config` action minus the `action` key)
+/// into the current config and persist it. Unknown fields are ignored; if the
+/// merged document still deserializes into `Config`, we accept it.
+fn apply_config_patch(app: &AppHandle, body: serde_json::Value) {
+    let Some(state) = app.try_state::<ConfigState>() else {
+        return;
+    };
+    let prior = state.snapshot();
+    let Ok(mut current) = serde_json::to_value(&prior) else {
+        return;
+    };
+    if let (Some(dst), Some(src)) = (current.as_object_mut(), body.as_object()) {
+        for (k, v) in src {
+            if k == "action" {
+                continue;
+            }
+            dst.insert(k.clone(), v.clone());
+        }
+    }
+    let Ok(new_cfg) = serde_json::from_value::<Config>(current) else {
+        return;
+    };
+    state.with_mut(|c| *c = new_cfg.clone());
+    let _ = state.save_to_disk();
+    apply_config_to_window(app, &new_cfg, Some(&prior));
+    emit_config_updated(app);
+}
+
 async fn post_status(
     State(app): State<AppHandle>,
     headers: HeaderMap,
@@ -97,8 +125,8 @@ async fn post_status(
         StatusRequest::Clear(p) => {
             state.apply_clear(&p.id);
         }
-        StatusRequest::Config(_) => {
-            // Stage 5 wires real config handling; accept and ignore for now.
+        StatusRequest::Config(body) => {
+            apply_config_patch(&app, body);
             return StatusCode::NO_CONTENT;
         }
     }

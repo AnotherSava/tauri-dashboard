@@ -6,6 +6,9 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
+use crate::commands::emit_config_updated;
+use crate::config::ConfigState;
+
 const MENU_SHOW_HIDE: &str = "show_hide";
 const MENU_ALWAYS_ON_TOP: &str = "always_on_top";
 const MENU_SAVE_POSITION: &str = "save_position";
@@ -26,16 +29,19 @@ pub struct TrayHandles {
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let show_hide = MenuItem::with_id(app, MENU_SHOW_HIDE, "Show / Hide", true, None::<&str>)?;
 
-    let aot_initial = app
-        .get_webview_window("main")
-        .and_then(|w| w.is_always_on_top().ok())
-        .unwrap_or(true);
+    let (aot_initial, save_pos_initial) = app
+        .try_state::<ConfigState>()
+        .map(|s| {
+            let c = s.snapshot();
+            (c.always_on_top, c.save_window_position)
+        })
+        .unwrap_or((true, false));
     let always_on_top = CheckMenuItem::with_id(
         app, MENU_ALWAYS_ON_TOP, "Always on top", true, aot_initial, None::<&str>,
     )?;
 
     let save_position = CheckMenuItem::with_id(
-        app, MENU_SAVE_POSITION, "Save position on exit", true, false, None::<&str>,
+        app, MENU_SAVE_POSITION, "Save position on exit", true, save_pos_initial, None::<&str>,
     )?;
 
     let autostart_initial = app.autolaunch().is_enabled().unwrap_or(false);
@@ -131,17 +137,27 @@ fn toggle_always_on_top(app: &AppHandle) {
     };
     let new_state = !window.is_always_on_top().unwrap_or(false);
     let _ = window.set_always_on_top(new_state);
+    if let Some(state) = app.try_state::<ConfigState>() {
+        state.with_mut(|c| c.always_on_top = new_state);
+        let _ = state.save_to_disk();
+    }
     if let Some(handles) = app.try_state::<TrayHandles>() {
         let _ = handles.always_on_top.set_checked(new_state);
     }
+    emit_config_updated(app);
 }
 
 fn toggle_save_position(app: &AppHandle) {
-    // Stage 5 wires persistence; for now the check-mark is visual state only.
+    let Some(state) = app.try_state::<ConfigState>() else {
+        return;
+    };
+    let new_state = !state.snapshot().save_window_position;
+    state.with_mut(|c| c.save_window_position = new_state);
+    let _ = state.save_to_disk();
     if let Some(handles) = app.try_state::<TrayHandles>() {
-        let current = handles.save_position.is_checked().unwrap_or(false);
-        let _ = handles.save_position.set_checked(!current);
+        let _ = handles.save_position.set_checked(new_state);
     }
+    emit_config_updated(app);
 }
 
 fn toggle_autostart(app: &AppHandle) {
