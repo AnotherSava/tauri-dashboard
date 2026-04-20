@@ -29,7 +29,10 @@ pub struct AgentSession {
 pub struct SetInput {
     pub id: String,
     pub status: Status,
-    pub label: String,
+    /// None = preserve prior label. The Python hook omits this field when it
+    /// has no new label to report (e.g. transitioning to `working` without a
+    /// fresh prompt), and expects the widget to keep whatever was there.
+    pub label: Option<String>,
     pub source: Option<String>,
     pub model: Option<String>,
     pub input_tokens: Option<u64>,
@@ -62,7 +65,9 @@ impl AppState {
             let task_boundary =
                 matches!(prior, Status::Done | Status::Idle) && input.status == Status::Working;
             if task_boundary {
-                existing.original_prompt = Some(input.label.clone());
+                if let Some(ref l) = input.label {
+                    existing.original_prompt = Some(l.clone());
+                }
                 existing.working_accumulated_ms = 0;
             }
 
@@ -71,7 +76,9 @@ impl AppState {
             }
 
             existing.status = input.status;
-            existing.label = input.label;
+            if let Some(l) = input.label {
+                existing.label = l;
+            }
             if let Some(src) = input.source {
                 existing.source = src;
             }
@@ -83,15 +90,16 @@ impl AppState {
             }
             existing.updated = now_ms;
         } else {
-            let original_prompt = if input.status == Status::Working {
-                Some(input.label.clone())
+            let label = input.label.unwrap_or_default();
+            let original_prompt = if input.status == Status::Working && !label.is_empty() {
+                Some(label.clone())
             } else {
                 None
             };
             sessions.push(AgentSession {
                 id: input.id,
                 status: input.status,
-                label: input.label,
+                label,
                 original_prompt,
                 source: input.source.unwrap_or_else(|| "claude-code".to_string()),
                 model: input.model,
@@ -117,7 +125,18 @@ mod tests {
         SetInput {
             id: id.to_string(),
             status,
-            label: label.to_string(),
+            label: Some(label.to_string()),
+            source: None,
+            model: None,
+            input_tokens: None,
+        }
+    }
+
+    fn set_no_label(id: &str, status: Status) -> SetInput {
+        SetInput {
+            id: id.to_string(),
+            status,
+            label: None,
             source: None,
             model: None,
             input_tokens: None,
@@ -249,7 +268,7 @@ mod tests {
             SetInput {
                 id: "a".into(),
                 status: Status::Working,
-                label: "task".into(),
+                label: Some("task".into()),
                 source: None,
                 model: Some("claude-opus-4-7".into()),
                 input_tokens: Some(50_000),
@@ -259,5 +278,28 @@ mod tests {
         let s = get(&state, "a");
         assert_eq!(s.model.as_deref(), Some("claude-opus-4-7"));
         assert_eq!(s.input_tokens, Some(50_000));
+    }
+
+    #[test]
+    fn missing_label_preserves_prior_label() {
+        let state = AppState::new();
+        state.apply_set(set("a", Status::Working, "fix foo.py"), 0);
+        state.apply_set(set_no_label("a", Status::Awaiting), 5_000);
+        let s = get(&state, "a");
+        assert_eq!(s.label, "fix foo.py", "label must survive a set with no label field");
+        assert_eq!(s.status, Status::Awaiting);
+    }
+
+    #[test]
+    fn task_boundary_with_missing_label_preserves_prior_original_prompt() {
+        let state = AppState::new();
+        state.apply_set(set("a", Status::Working, "fix foo.py"), 0);
+        state.apply_set(set("a", Status::Done, "done"), 10_000);
+        // New task starts, but hook didn't send a prompt label (e.g. prompt
+        // wasn't captured) — original_prompt should remain whatever it was.
+        state.apply_set(set_no_label("a", Status::Working), 20_000);
+        let s = get(&state, "a");
+        assert_eq!(s.original_prompt.as_deref(), Some("fix foo.py"));
+        assert_eq!(s.working_accumulated_ms, 0, "still resets accumulator on task boundary");
     }
 }

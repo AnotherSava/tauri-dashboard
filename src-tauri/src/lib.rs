@@ -1,4 +1,5 @@
 mod commands;
+mod http_server;
 mod state;
 
 use state::AppState;
@@ -15,6 +16,11 @@ pub fn run() {
             commands::quit_app,
         ])
         .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                http_server::run(handle, http_server::DEFAULT_PORT).await;
+            });
+
             #[cfg(debug_assertions)]
             seed_dev_sessions(&app.handle());
             Ok(())
@@ -40,7 +46,7 @@ fn seed_dev_sessions(app: &tauri::AppHandle) {
         SetInput {
             id: "tauri-dashboard".into(),
             status: Status::Working,
-            label: "I want to migrate an existing electron project to tauri framework".into(),
+            label: Some("I want to migrate an existing electron project to tauri framework".into()),
             source: Some("claude-code".into()),
             model: Some("claude-opus-4-7".into()),
             input_tokens: Some(75_000),
@@ -52,7 +58,7 @@ fn seed_dev_sessions(app: &tauri::AppHandle) {
         SetInput {
             id: "auth-service".into(),
             status: Status::Working,
-            label: "Add pytest coverage for auth module".into(),
+            label: Some("Add pytest coverage for auth module".into()),
             source: Some("claude-code".into()),
             model: Some("claude-sonnet-4-6".into()),
             input_tokens: Some(152_000),
@@ -63,7 +69,7 @@ fn seed_dev_sessions(app: &tauri::AppHandle) {
         SetInput {
             id: "auth-service".into(),
             status: Status::Awaiting,
-            label: "Can I run bash: pytest -xvs tests/test_auth.py?".into(),
+            label: Some("Can I run bash: pytest -xvs tests/test_auth.py?".into()),
             source: None,
             model: None,
             input_tokens: Some(152_000),
