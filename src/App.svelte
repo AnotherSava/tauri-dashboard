@@ -1,7 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import SessionList from './lib/components/SessionList.svelte'
-  import { getConfig, getSessions, onConfigUpdated, onSessionsUpdated } from './lib/api'
+  import {
+    getConfig,
+    getSessions,
+    onConfigUpdated,
+    onSessionsUpdated,
+    showWindow,
+  } from './lib/api'
   import type { AgentSession, Config } from './lib/types'
 
   let sessions = $state<AgentSession[]>([])
@@ -20,6 +26,13 @@
         unlistenConfig = await onConfigUpdated((c) => (config = c))
       } catch (err) {
         console.error('failed to initialize', err)
+      } finally {
+        await tick()
+        try {
+          await showWindow()
+        } catch (err) {
+          console.error('failed to reveal window', err)
+        }
       }
     })()
 

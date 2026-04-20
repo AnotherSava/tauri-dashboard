@@ -62,6 +62,16 @@ pub fn run() {
                         config_watcher::apply_default_position(&window);
                     }
                 }
+
+                // Safety net: if the frontend never calls `show_window`
+                // (broken JS, slow webview), reveal the window anyway.
+                let window_for_timeout = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    if matches!(window_for_timeout.is_visible(), Ok(false)) {
+                        let _ = window_for_timeout.show();
+                    }
+                });
             }
 
             tray::setup(app.handle())?;
