@@ -191,6 +191,7 @@ Permissions follow a naming convention:
     "core:window:default",
     "core:window:allow-set-title",
     "core:window:allow-close",
+    "core:window:allow-start-dragging",
     "core:app:default",
     "core:resources:default",
     "core:menu:default",
@@ -198,6 +199,8 @@ Permissions follow a naming convention:
   ]
 }
 ```
+
+**Gotcha — frameless windows and drag regions.** When you set `"decorations": false` and rely on the `data-tauri-drag-region` HTML attribute (or the equivalent `window.startDragging()` call) to let users drag the window by its titlebar, the capability must include `core:window:allow-start-dragging`. The `core:window:default` set does **not** cover it — without this permission, clicking and holding on the drag region logs `window.start_dragging not allowed` in the webview console and the window sits still.
 
 ### Plugin Permissions
 

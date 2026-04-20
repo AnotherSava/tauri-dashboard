@@ -17,7 +17,26 @@ cargo tauri icon ./custom.png -o ./icons  # Custom source/output
 cargo tauri icon --ios-color "#000000"    # iOS background color
 ```
 
-**Source requirements:** Squared PNG or SVG with transparency.
+**Source requirements:** Squared PNG or SVG with transparency, **at least 1024×1024** pixels. Smaller inputs can produce blurry `@2x` variants and Windows Store logos; the CLI won't hard-fail but the generated assets will be softer than they should be.
+
+### Migrating from an existing `.ico`
+
+When porting from an older project that already has a multi-resolution `.ico`, extract the largest embedded image with Pillow and upscale it to the required 1024×1024:
+
+```python
+from PIL import Image
+im = Image.open("old-project/icon.ico")
+# Pick the largest frame: ICOs embed several sizes; .size defaults to the first.
+im.size = (256, 256)  # or max(im.ico.sizes()) if available
+im.load()
+im.resize((1024, 1024), Image.LANCZOS).save("icon.png")
+```
+
+Then feed `icon.png` to `cargo tauri icon`. The LANCZOS resample is the right choice for icon upscaling — it keeps edges sharp without introducing the ringing that BICUBIC can add.
+
+### Stripping unused mobile output
+
+`cargo tauri icon` emits `icons/android/` and `icons/ios/` subdirectories alongside the desktop assets, even for desktop-only projects. If you don't target mobile, delete those subdirs before committing — they're substantial (~30 small PNGs) and never used by the Windows NSIS / macOS DMG / Linux bundle paths.
 
 ### Generated Formats
 

@@ -275,6 +275,61 @@ fn update_menu_text(app: tauri::AppHandle, item_id: String, text: String) -> Res
 }
 ```
 
+### Check-Mark Menu Items (Checkboxes)
+
+For tray toggles that reflect a boolean backing state (always-on-top, save-position, autostart, etc.), use `CheckMenuItem` instead of `MenuItem`. To keep the visible check-mark synced with the underlying setting after a click, store the `CheckMenuItem` handles in managed state and flip `.set_checked(...)` from the menu handler:
+
+```rust
+use std::sync::Arc;
+use tauri::{menu::CheckMenuItem, Manager, Wry};
+
+// Managed struct holds clones of each check item so handlers can update them.
+pub struct TrayHandles {
+    pub always_on_top: CheckMenuItem<Wry>,
+    pub save_position: CheckMenuItem<Wry>,
+}
+
+pub fn setup(app: &tauri::AppHandle) -> tauri::Result<()> {
+    // Read initial state from your config / window / plugin so the checkmarks
+    // show the real starting value, not a hardcoded default.
+    let aot_initial = app.get_webview_window("main")
+        .and_then(|w| w.is_always_on_top().ok())
+        .unwrap_or(true);
+
+    let always_on_top = CheckMenuItem::with_id(
+        app, "always_on_top", "Always on top", /* enabled */ true,
+        /* checked */ aot_initial, None::<&str>,
+    )?;
+    let save_position = CheckMenuItem::with_id(
+        app, "save_position", "Save position on exit", true, false, None::<&str>,
+    )?;
+
+    // ...build menu and tray as usual, then:
+    app.manage(TrayHandles {
+        always_on_top: always_on_top.clone(),
+        save_position: save_position.clone(),
+    });
+    Ok(())
+}
+
+fn toggle_always_on_top(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    let new_state = !window.is_always_on_top().unwrap_or(false);
+    let _ = window.set_always_on_top(new_state);
+    // Sync the tray check-mark to the new window state.
+    if let Some(handles) = app.try_state::<TrayHandles>() {
+        let _ = handles.always_on_top.set_checked(new_state);
+    }
+}
+```
+
+Two points specific to `CheckMenuItem` vs `MenuItem`:
+
+- The constructor takes an extra `checked: bool` positional argument before the accelerator.
+- `.is_checked()` / `.set_checked(bool)` both return `tauri::Result<…>`; `.cloned()` is cheap (internally `Arc`-backed), so storing multiple references for later updates is fine.
+
+Alternative without managed handles: retrieve the item on demand via `menu.get("<id>")` and downcast with `if let Some(MenuItemKind::Check(item)) = ...`. Works, but the managed-handle approach avoids the downcast and keeps handler bodies small.
+
 ### Replace Entire Menu
 
 ```rust

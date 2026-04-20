@@ -145,6 +145,8 @@ npm run tauri dev
 
 **Verify:** `npm run tauri dev` should compile the Rust backend and open a window displaying your frontend. If the window appears, the project is set up correctly.
 
+**Gotcha — "svelte" template is SvelteKit, not plain Svelte.** `create-tauri-app`'s `svelte` / `svelte-ts` templates scaffold a full **SvelteKit** project (with `src/routes/`, `src/app.html`, and `@sveltejs/kit` as a dep) — not plain Svelte + Vite. SvelteKit adds file-based routing, adapters, and SSR tooling that a single-window desktop widget doesn't need. For plain Svelte, use Method 2 instead: scaffold the frontend with `npm create vite@latest . -- --template svelte-ts`, then `npx tauri init`. The `vue`, `react`, `solid`, and `preact` templates produce plain Vite projects as expected — only the Svelte template differs.
+
 ### Method 2: Manual Setup (Existing Projects)
 
 Add Tauri to an existing frontend project.
