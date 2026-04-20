@@ -1,0 +1,4 @@
+title: AI Agent Dashboard
+description: A real-time desktop widget that tracks what your AI coding agents are doing.
+theme: jekyll-theme-hacker
+baseurl: /tauri-dashboard

@@ -1,0 +1,110 @@
+---
+layout: default
+title: Development
+---
+
+[Home](..) | [Claude Code](claude-code) | [HTTP API](http-api) | [Development](development)
+
+---
+
+## Setup
+
+### Prerequisites
+
+- **Rust** 1.70+ (`rustup default stable-msvc` on Windows).
+- **Microsoft C++ Build Tools** (Visual Studio Installer → "Desktop development with C++").
+- **Node.js** 20+ and **npm** 10+.
+- **WebView2** (preinstalled on Windows 10 1803+ — the installer fetches it if missing on older machines).
+
+### Install
+
+```bash
+git clone git@github.com:AnotherSava/tauri-dashboard.git
+cd tauri-dashboard
+npm install
+```
+
+### Run from source
+
+```bash
+npm run tauri dev
+```
+
+Compiles the Rust backend, starts Vite on `localhost:1420`, and launches the native window. Frontend edits hot-reload; Rust edits trigger a rebuild on save.
+
+## Commands
+
+- `npm run tauri dev` — dev build with HMR.
+- `npm run tauri build` — release build; NSIS installer lands in `src-tauri/target/release/bundle/nsis/`.
+- `npm run check` — TypeScript + Svelte check (no build).
+- `npm run tauri icon <path/to/1024.png>` — regenerate the Windows / Linux / macOS icon set from a source PNG.
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib` — Rust unit tests (state machine, transcript parser, merge policy).
+- `python tests/test_claude_hook.py -v` — Python hook tests (chat-id derivation, classify, benign-closer logic, config path resolution).
+
+## Architecture
+
+The app pairs a Rust backend (Tauri v2) with a Svelte 5 + Vite frontend rendered in a native WebView2 window. The Rust side owns all state and external I/O; the frontend is a pure view that subscribes to Tauri events and issues invoke-style commands for window control. External tools integrate via an embedded `axum` HTTP server on `127.0.0.1:9077`, bypassing the frontend entirely.
+
+The source-of-truth `AgentSession` state lives behind a `Mutex` in Rust. Three paths mutate it — the HTTP server, the per-session transcript watcher, and Tauri commands triggered by the tray — and every mutation funnels through `state::apply_set` so the sticky-label state machine is enforced in exactly one place.
+
+## Project structure
+
+```
+tauri-dashboard/
+├── src/                                Svelte frontend (Vite)
+│   ├── App.svelte                       top-level layout, subscribes to Tauri events
+│   ├── main.ts                          mount entry point
+│   └── lib/
+│       ├── types.ts                     shared TS types and display helpers
+│       ├── mockSessions.ts              dev-only fixtures (unused in release)
+│       ├── api.ts                       invoke / listen wrappers
+│       └── components/
+│           ├── SessionList.svelte       list container, empty-state
+│           └── SessionItem.svelte       per-row rendering (pill, timer, tokens, label)
+├── src-tauri/
+│   ├── Cargo.toml                       Rust deps: tauri, axum, notify, tracing, serde
+│   ├── tauri.conf.json                  NSIS target, WebView2 bootstrapper, window config
+│   ├── capabilities/default.json        capability-based permissions for the main window
+│   └── src/
+│       ├── main.rs                      entry; calls lib::run()
+│       ├── lib.rs                       Builder: plugins, state, commands, setup hook
+│       ├── state.rs                     AgentSession struct, apply_set sticky-label machine
+│       ├── config.rs                    Config struct, load/save, ConfigState wrapper
+│       ├── config_watcher.rs            notify watcher for config.json hot-reload
+│       ├── commands.rs                  Tauri commands + event emitters
+│       ├── http_server.rs               axum routes for POST /api/status
+│       ├── log_watcher.rs               per-session transcript tailing + infer_state
+│       ├── tray.rs                      TrayIconBuilder, menu handlers, autostart
+│       └── logging.rs                   tracing subscriber → widget.log
+├── integrations/
+│   └── claude_hook.py                   Claude Code hook: classify + POST
+├── tests/
+│   └── test_claude_hook.py              unittest: 50 cases
+├── docs/                                this site
+└── .github/workflows/release.yml        CI: build NSIS installer on tag push
+```
+
+### Where state lives at runtime
+
+- **In-memory** — `AppState` (sessions) and `ConfigState` (config) via `tauri::State`.
+- **On disk** — `config.json` and `widget.log` under `app_data_dir()`:
+  - Windows: `%APPDATA%\com.anothersava.ai-agent-dashboard\`
+  - macOS: `~/Library/Application Support/com.anothersava.ai-agent-dashboard/`
+  - Linux: `$XDG_CONFIG_HOME/com.anothersava.ai-agent-dashboard/` (or `~/.config/...`)
+
+## Architecture reference
+
+- [Data flow](data-flow) — end-to-end paths from a Python hook POST or a transcript file change to a rendered pixel.
+
+## Testing
+
+Rust tests live inline in `#[cfg(test)]` modules next to the code they cover:
+
+- `state::tests` — 11 cases covering the sticky-label machine, working-time accumulator, and error transitions.
+- `log_watcher::tests` — 24 cases covering the transcript parser (`infer_state`, `split_complete`) and the upgrade-only merge policy.
+
+Python tests live under `tests/`:
+
+- `test_claude_hook.py` — 50 cases covering chat-id derivation, `classify` / `build_body`, benign-closer logic, config loading, widget-URL derivation, and per-platform config path resolution.
+
+CI (`.github/workflows/release.yml`) runs Rust tests before bundling on every tag push, so a broken state machine can't ship a release.
