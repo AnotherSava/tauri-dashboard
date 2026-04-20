@@ -11,7 +11,16 @@ pub struct Config {
     pub window_position: Option<WindowPosition>,
     pub context_window_tokens: HashMap<String, u64>,
     pub context_bar_thresholds: Vec<Threshold>,
+    /// Read by `integrations/claude_hook.py`: conversational closers that end
+    /// with '?' but shouldn't register as awaiting (e.g. "What's next?"). The
+    /// widget itself doesn't consume this field.
     pub benign_closers: Vec<String>,
+    /// Read by `integrations/claude_hook.py`: used to derive a friendly
+    /// chat_id from `cwd`. When a Claude session starts under this directory,
+    /// the relative path is used as the session id. None = always use the
+    /// basename of cwd.
+    #[serde(default)]
+    pub projects_root: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -46,6 +55,7 @@ impl Default for Config {
                 Threshold { percent: 85.0, color: "#c64a4a".into() },
             ],
             benign_closers: vec!["What's next?".into(), "Anything else?".into()],
+            projects_root: None,
         }
     }
 }
