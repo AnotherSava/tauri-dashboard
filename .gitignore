@@ -1,1 +1,16 @@
 .claude/settings.local.json
+
+# Node / Vite
+node_modules
+dist
+dist-ssr
+*.log
+npm-debug.log*
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# OS
+.DS_Store
+*.local
