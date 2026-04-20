@@ -89,6 +89,18 @@ class BuildBodyTests(unittest.TestCase):
         body = build_body("working", {"prompt": "first line\nsecond  line\twith\ttabs"}, "demo")
         self.assertEqual(body["label"], "first line second line with tabs")
 
+    def test_working_strips_terminal_chrome_glyphs(self) -> None:
+        # Claude Code embeds tree-corner ⎿ (U+23BF), box-drawing │ (U+2502),
+        # and block ▌ (U+258C) in tool-output lines. These are pure chrome
+        # and should be replaced with spaces then collapsed.
+        body = build_body("working", {"prompt": "⎿ Error: │ failed ▌ retry"}, "demo")
+        self.assertEqual(body["label"], "Error: failed retry")
+
+    def test_working_preserves_legitimate_unicode(self) -> None:
+        # Emoji, accents, and CJK must survive the chrome strip.
+        body = build_body("working", {"prompt": "café 日本語 🚀 fix"}, "demo")
+        self.assertEqual(body["label"], "café 日本語 🚀 fix")
+
     def test_working_with_empty_prompt_omits_label(self) -> None:
         body = build_body("working", {"prompt": "   "}, "demo")
         self.assertNotIn("label", body)
@@ -170,6 +182,11 @@ class BuildBodyTests(unittest.TestCase):
         body = build_body("idle", {"notification_type": "attention", "message": "y" * 200}, "demo")
         self.assertEqual(body["status"], "awaiting")
         self.assertEqual(len(body["label"]), 60)
+
+    def test_notification_message_strips_terminal_chrome_glyphs(self) -> None:
+        body = build_body("idle", {"message": "⎿  Error: pattern blocked"}, "demo")
+        self.assertEqual(body["status"], "awaiting")
+        self.assertEqual(body["label"], "Error: pattern blocked")
 
     def test_clear_returns_clear_action_only(self) -> None:
         body = build_body("clear", {"prompt": "ignored"}, "demo")

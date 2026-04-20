@@ -119,9 +119,17 @@ def last_assistant_ends_with_question(transcript_path, benign_closers=()) -> boo
         return False
 
 
+# Terminal-UI chrome Claude Code embeds in its output — U+2300–U+23FF
+# (Misc Technical, including the ⎿ tool-output corner), U+2500–U+257F
+# (Box Drawing), U+2580–U+259F (Block Elements). Stripping these keeps
+# emoji / accents / CJK untouched.
+_CHROME_GLYPHS = {cp: ' ' for cp in list(range(0x2300, 0x2400)) + list(range(0x2500, 0x25A0))}
+
+
 def _clean_prompt(text: str) -> str:
     for ch in ('\n', '\r', '\t', '\v', '\f'):
         text = text.replace(ch, ' ')
+    text = text.translate(_CHROME_GLYPHS)
     while '  ' in text:
         text = text.replace('  ', ' ')
     return text.strip()
@@ -163,8 +171,8 @@ def classify(arg: str, payload: dict, benign_closers=()) -> tuple[str, str | Non
                 return "awaiting", "has a question"
             return "done", None
         label = _notification_label(payload)
-        label = label.strip().splitlines()[0][:60] if isinstance(label, str) and label.strip() else None
-        return "awaiting", label
+        cleaned = _clean_prompt(label) if isinstance(label, str) else ""
+        return "awaiting", cleaned[:60] if cleaned else None
     return arg, None
 
 
@@ -204,6 +212,13 @@ def main() -> None:
     if len(sys.argv) < 2:
         return
     arg = sys.argv[1]
+    # Claude Code sends UTF-8 JSON on stdin, but Python's default stdin
+    # encoding on Windows is the system codepage (e.g. cp1251) — without this
+    # line, non-ASCII prompt chars like ⎿ become mojibake before we see them.
+    try:
+        sys.stdin.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
     try:
         payload = json.load(sys.stdin)
     except Exception:
