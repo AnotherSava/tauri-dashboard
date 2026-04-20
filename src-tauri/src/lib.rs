@@ -1,12 +1,18 @@
 mod commands;
 mod http_server;
 mod state;
+mod tray;
 
 use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::get_sessions,
@@ -16,6 +22,8 @@ pub fn run() {
             commands::quit_app,
         ])
         .setup(|app| {
+            tray::setup(app.handle())?;
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 http_server::run(handle, http_server::DEFAULT_PORT).await;
