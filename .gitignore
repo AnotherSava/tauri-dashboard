@@ -24,3 +24,6 @@ __pycache__/
 /docs/plans/*
 !/docs/plans/completed/
 !/docs/plans/draft/
+
+# Local convenience scripts (not committed)
+scripts/
