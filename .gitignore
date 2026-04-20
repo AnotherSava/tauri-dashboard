@@ -14,3 +14,9 @@ src-tauri/gen/schemas/
 # OS
 .DS_Store
 *.local
+
+# Plans: ignore in-flight plans in docs/plans/ itself;
+# keep completed/ and draft/ tracked.
+/docs/plans/*
+!/docs/plans/completed/
+!/docs/plans/draft/
