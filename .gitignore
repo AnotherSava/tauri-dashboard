@@ -15,6 +15,10 @@ src-tauri/gen/schemas/
 .DS_Store
 *.local
 
+# Python
+__pycache__/
+*.pyc
+
 # Plans: ignore in-flight plans in docs/plans/ itself;
 # keep completed/ and draft/ tracked.
 /docs/plans/*
