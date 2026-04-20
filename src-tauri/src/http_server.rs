@@ -21,18 +21,18 @@ pub async fn run(app: AppHandle, port: u16) {
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[http_server] failed to bind on {addr}: {e}");
+            tracing::error!(%addr, error = %e, "http bind failed");
             return;
         }
     };
-    eprintln!("[http_server] listening on http://{addr}");
+    tracing::info!(%addr, "http listening");
 
     let router = Router::new()
         .route("/api/status", post(post_status))
         .with_state(app);
 
     if let Err(e) = axum::serve(listener, router).await {
-        eprintln!("[http_server] serve error: {e}");
+        tracing::error!(error = %e, "http serve ended");
     }
 }
 

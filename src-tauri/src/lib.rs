@@ -3,6 +3,7 @@ mod config;
 mod config_watcher;
 mod http_server;
 mod log_watcher;
+mod logging;
 mod state;
 mod tray;
 
@@ -33,6 +34,11 @@ pub fn run() {
 
             let app_data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data).ok();
+
+            let log_guard = logging::init(&app_data);
+            app.manage(log_guard);
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), "widget starting");
+
             let config_path = app_data.join("config.json");
 
             let config_state = ConfigState::new(config_path.clone());

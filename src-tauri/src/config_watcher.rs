@@ -14,12 +14,12 @@ pub fn spawn(app: AppHandle, path: PathBuf) {
         let parent = match path.parent() {
             Some(p) => p.to_path_buf(),
             None => {
-                eprintln!("[config_watcher] config path has no parent: {path:?}");
+                tracing::error!(?path, "config path has no parent");
                 return;
             }
         };
         if let Err(e) = std::fs::create_dir_all(&parent) {
-            eprintln!("[config_watcher] create_dir_all({parent:?}) failed: {e}");
+            tracing::error!(?parent, error = %e, "create config dir failed");
             return;
         }
 
@@ -40,14 +40,14 @@ pub fn spawn(app: AppHandle, path: PathBuf) {
         ) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("[config_watcher] failed to create watcher: {e}");
+                tracing::error!(error = %e, "config watcher create failed");
                 return;
             }
         };
 
         // Watch the parent directory; the config file itself may not exist yet.
         if let Err(e) = watcher.watch(&parent, RecursiveMode::NonRecursive) {
-            eprintln!("[config_watcher] watch({parent:?}) failed: {e}");
+            tracing::error!(?parent, error = %e, "config watch failed");
             return;
         }
 
