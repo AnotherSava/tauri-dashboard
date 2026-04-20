@@ -1,13 +1,30 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import SessionList from './lib/components/SessionList.svelte'
-  import { mockSessions, mockConfig } from './lib/mockSessions'
+  import { getSessions, onSessionsUpdated } from './lib/api'
+  import { mockConfig } from './lib/mockSessions'
+  import type { AgentSession } from './lib/types'
 
+  let sessions = $state<AgentSession[]>([])
   let now = $state(Date.now())
 
   onMount(() => {
-    const id = setInterval(() => (now = Date.now()), 1000)
-    return () => clearInterval(id)
+    let unlisten: (() => void) | undefined
+
+    ;(async () => {
+      try {
+        sessions = await getSessions()
+        unlisten = await onSessionsUpdated((s) => (sessions = s))
+      } catch (err) {
+        console.error('failed to load sessions', err)
+      }
+    })()
+
+    const tickId = setInterval(() => (now = Date.now()), 1000)
+    return () => {
+      clearInterval(tickId)
+      unlisten?.()
+    }
   })
 </script>
 
@@ -15,7 +32,7 @@
   <header data-tauri-drag-region>
     <span class="title" data-tauri-drag-region>AI AGENTS</span>
   </header>
-  <SessionList sessions={mockSessions} config={mockConfig} {now} />
+  <SessionList {sessions} config={mockConfig} {now} />
 </div>
 
 <style>
