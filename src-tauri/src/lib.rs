@@ -2,10 +2,12 @@ mod commands;
 mod config;
 mod config_watcher;
 mod http_server;
+mod log_watcher;
 mod state;
 mod tray;
 
 use config::ConfigState;
+use log_watcher::WatcherRegistry;
 use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,6 +19,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
+        .manage(WatcherRegistry::new())
         .invoke_handler(tauri::generate_handler![
             commands::get_sessions,
             commands::get_config,

@@ -8,9 +8,12 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 use tauri::{AppHandle, Manager};
 
+use std::path::PathBuf;
+
 use crate::commands::{emit_config_updated, emit_sessions_updated, now_ms};
 use crate::config::{Config, ConfigState};
 use crate::config_watcher::apply_config_to_window;
+use crate::log_watcher::WatcherRegistry;
 use crate::state::{AppState, SetInput, Status};
 
 pub async fn run(app: AppHandle, port: u16) {
@@ -51,10 +54,7 @@ struct SetPayload {
     model: Option<String>,
     #[serde(rename = "inputTokens")]
     input_tokens: Option<u64>,
-    // Tolerated-but-ignored fields so the existing Python hook's body shape
-    // doesn't trigger deserialization errors.
-    #[serde(default, rename = "transcript_path")]
-    _transcript_path: Option<String>,
+    transcript_path: Option<String>,
     #[serde(default)]
     _updated: Option<i64>,
 }
@@ -112,6 +112,8 @@ async fn post_status(
 
     match payload {
         StatusRequest::Set(p) => {
+            let transcript_path = p.transcript_path.clone();
+            let chat_id = p.id.clone();
             let input = SetInput {
                 id: p.id,
                 status: p.status,
@@ -121,9 +123,18 @@ async fn post_status(
                 input_tokens: p.input_tokens,
             };
             state.apply_set(input, now_ms());
+
+            if let Some(tp) = transcript_path {
+                if let Some(reg) = app.try_state::<WatcherRegistry>() {
+                    reg.start(app.clone(), chat_id, PathBuf::from(tp));
+                }
+            }
         }
         StatusRequest::Clear(p) => {
             state.apply_clear(&p.id);
+            if let Some(reg) = app.try_state::<WatcherRegistry>() {
+                reg.stop(&p.id);
+            }
         }
         StatusRequest::Config(body) => {
             apply_config_patch(&app, body);
