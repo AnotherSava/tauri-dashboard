@@ -1,0 +1,98 @@
+import type { AgentSession, Config } from './types'
+
+const now = Date.now()
+const s = 1000
+const min = 60 * s
+
+export const mockSessions: AgentSession[] = [
+  {
+    id: 'new-project',
+    status: 'idle',
+    label: '',
+    original_prompt: null,
+    source: 'claude-code',
+    model: null,
+    input_tokens: null,
+    updated: now - 8 * s,
+    state_entered_at: now - 8 * s,
+    working_accumulated_ms: 0,
+  },
+  {
+    id: 'tauri-dashboard',
+    status: 'working',
+    label: 'I want to migrate an existing electron project to tauri framework',
+    original_prompt: 'I want to migrate an existing electron project to tauri framework',
+    source: 'claude-code',
+    model: 'claude-opus-4-7',
+    input_tokens: 75_000,
+    updated: now - 5 * s,
+    state_entered_at: now - 30 * s,
+    working_accumulated_ms: 2 * min + 30 * s,
+  },
+  {
+    id: 'auth-service',
+    status: 'awaiting',
+    label: 'Can I run bash: pytest -xvs tests/test_auth.py?',
+    original_prompt: 'Add pytest coverage for auth module',
+    source: 'claude-code',
+    model: 'claude-sonnet-4-6',
+    input_tokens: 152_000,
+    updated: now - 800,
+    state_entered_at: now - 45 * s,
+    working_accumulated_ms: 4 * min + 12 * s,
+  },
+  {
+    id: 'payments-api',
+    status: 'working',
+    label: 'yes',
+    original_prompt: 'Refactor payment processor to use Stripe v2 API',
+    source: 'claude-code',
+    model: 'claude-opus-4-7',
+    input_tokens: 180_000,
+    updated: now - 2 * s,
+    state_entered_at: now - 15 * s,
+    working_accumulated_ms: 8 * min,
+  },
+  {
+    id: 'user-migration',
+    status: 'done',
+    label: 'Migration complete',
+    original_prompt: 'Migrate users table to new schema',
+    source: 'claude-code',
+    model: 'claude-haiku-4-5',
+    input_tokens: 42_000,
+    updated: now - 45 * s,
+    state_entered_at: now - 30 * s,
+    working_accumulated_ms: 0,
+  },
+  {
+    id: 'staging-hosts',
+    status: 'error',
+    label: 'Permission denied: cannot write /etc/hosts',
+    original_prompt: 'Update local hosts file for staging',
+    source: 'claude-code',
+    model: 'claude-sonnet-4-6',
+    input_tokens: 8_000,
+    updated: now - 12 * s,
+    state_entered_at: now - 2 * min,
+    working_accumulated_ms: 0,
+  },
+]
+
+export const mockConfig: Config = {
+  server_port: 9077,
+  always_on_top: true,
+  save_window_position: false,
+  window_position: null,
+  context_window_tokens: {
+    'claude-opus-4-7': 200_000,
+    'claude-sonnet-4-6': 200_000,
+    'claude-haiku-4-5': 200_000,
+  },
+  context_bar_thresholds: [
+    { percent: 0, color: '#3a7c4a' },
+    { percent: 60, color: '#c6a03c' },
+    { percent: 85, color: '#c64a4a' },
+  ],
+  benign_closers: ["What's next?", 'Anything else?'],
+}
