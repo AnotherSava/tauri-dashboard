@@ -60,9 +60,10 @@ tauri-dashboard/
 │       ├── api.ts                       invoke / listen wrappers
 │       └── components/
 │           ├── SessionList.svelte       list container, empty-state
-│           └── SessionItem.svelte       per-row rendering (pill, timer, tokens, label)
+│           ├── SessionItem.svelte       per-row rendering (pill, timer, tokens, label)
+│           └── LimitBar.svelte          header 5h / 7d usage bar (segmented fill, overlays)
 ├── src-tauri/
-│   ├── Cargo.toml                       Rust deps: tauri, axum, notify, tracing, serde
+│   ├── Cargo.toml                       Rust deps: tauri, axum, notify, tracing, serde, reqwest, chrono, open
 │   ├── tauri.conf.json                  NSIS target, WebView2 bootstrapper, window config
 │   ├── capabilities/default.json        capability-based permissions for the main window
 │   └── src/
@@ -75,6 +76,9 @@ tauri-dashboard/
 │       ├── http_server.rs               axum routes for POST /api/status
 │       ├── log_watcher.rs               per-session transcript tailing + infer_state
 │       ├── tray.rs                      TrayIconBuilder, menu handlers, autostart
+│       ├── notifications.rs             1s-tick reconciler + Notifier trait
+│       ├── telegram.rs                  reqwest-based Telegram Bot API client
+│       ├── usage_limits.rs              Anthropic OAuth usage poller (5h / 7d buckets)
 │       └── logging.rs                   tracing subscriber → widget.log
 ├── integrations/
 │   └── claude_hook.py                   Claude Code hook: classify + POST

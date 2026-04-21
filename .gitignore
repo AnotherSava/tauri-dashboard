@@ -27,3 +27,7 @@ __pycache__/
 
 # Local convenience scripts (not committed)
 scripts/
+
+# Local deploy-time config override (may contain secrets).
+# The deploy script copies this to the install dir as config.json.
+config/local.json

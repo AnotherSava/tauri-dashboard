@@ -1,6 +1,8 @@
 use crate::config::{Config, ConfigState};
 use crate::log_watcher::WatcherRegistry;
 use crate::state::{AgentSession, AppState};
+use crate::telegram::TelegramNotifier;
+use crate::usage_limits::{UsageLimits, UsageLimitsState};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 #[tauri::command]
@@ -10,6 +12,11 @@ pub fn get_sessions(state: State<AppState>) -> Vec<AgentSession> {
 
 #[tauri::command]
 pub fn get_config(state: State<ConfigState>) -> Config {
+    state.snapshot()
+}
+
+#[tauri::command]
+pub fn get_usage_limits(state: State<UsageLimitsState>) -> UsageLimits {
     state.snapshot()
 }
 
@@ -69,4 +76,46 @@ pub fn emit_config_updated(app: &AppHandle) {
     if let Some(state) = app.try_state::<ConfigState>() {
         let _ = app.emit("config_updated", state.snapshot());
     }
+}
+
+pub fn emit_usage_limits_updated(app: &AppHandle) {
+    if let Some(state) = app.try_state::<UsageLimitsState>() {
+        let _ = app.emit("usage_limits_updated", state.snapshot());
+    }
+}
+
+#[tauri::command]
+pub async fn test_telegram_notification(app: AppHandle) -> Result<(), String> {
+    use crate::notifications::Notifier;
+
+    let cfg = app
+        .try_state::<ConfigState>()
+        .ok_or_else(|| "config state not initialized".to_string())?
+        .snapshot();
+    let tg_cfg = cfg
+        .notifications
+        .as_ref()
+        .and_then(|n| n.telegram.as_ref())
+        .ok_or_else(|| "no telegram config".to_string())?;
+
+    let notifier = std::sync::Arc::new(TelegramNotifier::new());
+    notifier.sync_config(Some(tg_cfg));
+    if !notifier.is_enabled() {
+        return Err("telegram bot_token and chat_id are required".to_string());
+    }
+
+    let handle = notifier
+        .send_raw("[dashboard] test — will self-delete in 5s")
+        .await
+        .map_err(|e| format!("telegram send failed: {e}"))?;
+
+    let notifier_clone = notifier.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        if let Err(e) = notifier_clone.dismiss(&handle).await {
+            tracing::warn!(?e, handle, "test notification self-delete failed");
+        }
+    });
+
+    Ok(())
 }

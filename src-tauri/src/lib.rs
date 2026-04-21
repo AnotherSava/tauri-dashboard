@@ -4,12 +4,16 @@ mod config_watcher;
 mod http_server;
 mod log_watcher;
 mod logging;
+mod notifications;
 mod state;
+mod telegram;
 mod tray;
+mod usage_limits;
 
 use config::ConfigState;
 use log_watcher::WatcherRegistry;
 use state::AppState;
+use usage_limits::{UsageLimitsPoller, UsageLimitsState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,14 +25,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .manage(WatcherRegistry::new())
+        .manage(UsageLimitsState::new())
         .invoke_handler(tauri::generate_handler![
             commands::get_sessions,
             commands::get_config,
+            commands::get_usage_limits,
             commands::hide_window,
             commands::show_window,
             commands::toggle_window,
             commands::quit_app,
             commands::remove_session,
+            commands::test_telegram_notification,
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -77,6 +84,8 @@ pub fn run() {
 
             tray::setup(app.handle())?;
             config_watcher::spawn(app.handle().clone(), config_path);
+            notifications::NotificationManager::spawn(app.handle().clone());
+            UsageLimitsPoller::spawn(app.handle().clone());
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
