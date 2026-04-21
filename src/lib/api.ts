@@ -26,6 +26,10 @@ export function quitApp(): Promise<void> {
   return invoke('quit_app')
 }
 
+export function removeSession(id: string): Promise<void> {
+  return invoke('remove_session', { id })
+}
+
 export function onSessionsUpdated(
   handler: (sessions: AgentSession[]) => void,
 ): Promise<UnlistenFn> {

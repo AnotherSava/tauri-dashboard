@@ -26,7 +26,7 @@ End-to-end: what happens when a Claude Code hook fires, when a transcript file g
                                            │  >>            │    updated")
                                            └────────┬───────┘
 ┌──────────────────┐  #[tauri::command]             │
-│  Svelte UI       │────────────────────▶ commands.rs
+│  Svelte UI       │────────────────────▶ commands.rs ──apply_clear──▶ AppState
 └──────────────────┘                                │
                                                     ▼
                                             Window / TrayIcon
@@ -63,6 +63,8 @@ Every mutation to session state funnels through `state::apply_set` or `state::ap
 7. If anything changed, the session's `updated` timestamp refreshes and `emit_sessions_updated` fires exactly as in Path 1.
 
 The initial drain on watcher startup suppresses the inferred **state** (a resume would otherwise snap to a stale "done" from the prior turn) but still surfaces model and token counts.
+
+Tauri commands have two possible targets: native window/tray APIs (`hide_window`, `show_window`, `toggle_window`, `quit_app`) or `AppState` itself — `remove_session` calls `apply_clear` to dismiss a row the user no longer cares about, then re-emits the snapshot on the same `sessions_updated` channel.
 
 ## Path 3 — Tray toggles
 

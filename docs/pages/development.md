@@ -45,7 +45,7 @@ Compiles the Rust backend, starts Vite on `localhost:1420`, and launches the nat
 
 The app pairs a Rust backend (Tauri v2) with a Svelte 5 + Vite frontend rendered in a native WebView2 window. The Rust side owns all state and external I/O; the frontend is a pure view that subscribes to Tauri events and issues invoke-style commands for window control. External tools integrate via an embedded `axum` HTTP server on `127.0.0.1:9077`, bypassing the frontend entirely.
 
-The source-of-truth `AgentSession` state lives behind a `Mutex` in Rust. Three paths mutate it — the HTTP server, the per-session transcript watcher, and Tauri commands triggered by the tray — and every mutation funnels through `state::apply_set` so the sticky-label state machine is enforced in exactly one place.
+The source-of-truth `AgentSession` state lives behind a `Mutex` in Rust. Three paths mutate it — the HTTP server, the per-session transcript watcher, and Tauri commands invoked from the Svelte UI — and every mutation funnels through `state::apply_set` or `state::apply_clear` so the sticky-label state machine is enforced in exactly one place.
 
 ## Project structure
 

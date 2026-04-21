@@ -28,6 +28,7 @@ pub fn run() {
             commands::show_window,
             commands::toggle_window,
             commands::quit_app,
+            commands::remove_session,
         ])
         .setup(|app| {
             use tauri::Manager;

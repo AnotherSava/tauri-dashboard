@@ -1,4 +1,5 @@
 use crate::config::{Config, ConfigState};
+use crate::log_watcher::WatcherRegistry;
 use crate::state::{AgentSession, AppState};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
@@ -37,6 +38,17 @@ pub fn toggle_window(window: WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+#[tauri::command]
+pub fn remove_session(id: String, app: AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.apply_clear(&id);
+    }
+    if let Some(reg) = app.try_state::<WatcherRegistry>() {
+        reg.stop(&id);
+    }
+    emit_sessions_updated(&app);
 }
 
 pub fn now_ms() -> i64 {
