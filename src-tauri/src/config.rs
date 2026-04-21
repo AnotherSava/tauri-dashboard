@@ -88,7 +88,7 @@ impl Default for Config {
             save_window_position: false,
             window_position: None,
             context_window_tokens: [
-                ("claude-opus-4-7".to_string(), 200_000),
+                ("claude-opus-4-7".to_string(), 1_000_000),
                 ("claude-sonnet-4-6".to_string(), 200_000),
                 ("claude-haiku-4-5".to_string(), 200_000),
             ]
