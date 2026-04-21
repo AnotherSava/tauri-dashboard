@@ -18,7 +18,6 @@
   let config = $state<Config | null>(null)
   let usage = $state<UsageLimits | null>(null)
   let now = $state(Date.now())
-  let resizing = $state(false)
 
   onMount(() => {
     let unlistenSessions: (() => void) | undefined
@@ -47,18 +46,8 @@
 
     const tickId = setInterval(() => (now = Date.now()), 1000)
 
-    let resizeIdleTimer: ReturnType<typeof setTimeout> | null = null
-    const onResize = () => {
-      resizing = true
-      if (resizeIdleTimer) clearTimeout(resizeIdleTimer)
-      resizeIdleTimer = setTimeout(() => (resizing = false), 150)
-    }
-    window.addEventListener('resize', onResize)
-
     return () => {
       clearInterval(tickId)
-      window.removeEventListener('resize', onResize)
-      if (resizeIdleTimer) clearTimeout(resizeIdleTimer)
       unlistenSessions?.()
       unlistenConfig?.()
       unlistenUsage?.()
@@ -79,7 +68,6 @@
         status={usage?.status ?? 'unavailable'}
         updated={usage?.updated ?? 0}
         {now}
-        {resizing}
         segments={config?.limit_bar_segments ?? 16}
         format="hm"
       />
@@ -88,7 +76,6 @@
         status={usage?.status ?? 'unavailable'}
         updated={usage?.updated ?? 0}
         {now}
-        {resizing}
         segments={config?.limit_bar_segments ?? 16}
         format="dhm"
       />

@@ -9,10 +9,9 @@
     now: number
     format: 'hm' | 'dhm'
     segments: number
-    resizing?: boolean
   }
 
-  let { bucket, status, updated, now, format, segments, resizing = false }: Props = $props()
+  let { bucket, status, updated, now, format, segments }: Props = $props()
 
   const segmentCount = $derived(Math.max(1, Math.floor(segments)))
   const hasData = $derived(bucket !== null)
@@ -81,7 +80,7 @@
   }
 </script>
 
-<div class="bar" class:resizing title={tooltip} data-tauri-drag-region>
+<div class="bar" title={tooltip} data-tauri-drag-region>
   <span class="cap cap-left" data-tauri-drag-region>{percentText}</span>
   <div
     class="segments"
@@ -113,12 +112,6 @@
     border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 3px;
     overflow: hidden;
-  }
-  .bar.resizing {
-    background: #2a2a2d;
-  }
-  .bar.resizing > * {
-    visibility: hidden;
   }
   .segments {
     position: relative;
