@@ -61,7 +61,7 @@ tauri-dashboard/
 │       └── components/
 │           ├── SessionList.svelte       list container, empty-state
 │           ├── SessionItem.svelte       per-row rendering (pill, timer, tokens, label)
-│           └── LimitBar.svelte          header 5h / 7d usage bar (segmented fill, overlays)
+│           └── LimitBar.svelte          header 5h / 7d usage bar (segmented fill, percent + timer caps)
 ├── src-tauri/
 │   ├── Cargo.toml                       Rust deps: tauri, axum, notify, tracing, serde, reqwest, chrono, open
 │   ├── tauri.conf.json                  NSIS target, WebView2 bootstrapper, window config

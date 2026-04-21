@@ -28,6 +28,10 @@ pub struct Config {
     /// rate-limits this endpoint aggressively (see claude-code#31637), so 10
     /// minutes is the conservative default. Clamped to 60s minimum at runtime.
     pub usage_limits_poll_interval_seconds: u64,
+    /// Number of segments in the 5h / 7d usage limit bars. Segments scale to
+    /// fit the available track width; higher values give finer resolution but
+    /// thinner individual segments.
+    pub limit_bar_segments: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -103,6 +107,7 @@ impl Default for Config {
             projects_root: None,
             notifications: Some(NotificationsConfig::default()),
             usage_limits_poll_interval_seconds: 600,
+            limit_bar_segments: 16,
         }
     }
 }

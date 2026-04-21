@@ -18,6 +18,7 @@
   let config = $state<Config | null>(null)
   let usage = $state<UsageLimits | null>(null)
   let now = $state(Date.now())
+  let resizing = $state(false)
 
   onMount(() => {
     let unlistenSessions: (() => void) | undefined
@@ -45,8 +46,19 @@
     })()
 
     const tickId = setInterval(() => (now = Date.now()), 1000)
+
+    let resizeIdleTimer: ReturnType<typeof setTimeout> | null = null
+    const onResize = () => {
+      resizing = true
+      if (resizeIdleTimer) clearTimeout(resizeIdleTimer)
+      resizeIdleTimer = setTimeout(() => (resizing = false), 150)
+    }
+    window.addEventListener('resize', onResize)
+
     return () => {
       clearInterval(tickId)
+      window.removeEventListener('resize', onResize)
+      if (resizeIdleTimer) clearTimeout(resizeIdleTimer)
       unlistenSessions?.()
       unlistenConfig?.()
       unlistenUsage?.()
@@ -61,12 +73,14 @@
 <div class="widget">
   <header data-tauri-drag-region>
     <span class="title" data-tauri-drag-region>AI AGENTS</span>
-    <div class="limits">
+    <div class="limits" data-tauri-drag-region>
       <LimitBar
         bucket={usage?.five_hour ?? null}
         status={usage?.status ?? 'unavailable'}
         updated={usage?.updated ?? 0}
         {now}
+        {resizing}
+        segments={config?.limit_bar_segments ?? 16}
         format="hm"
       />
       <LimitBar
@@ -74,6 +88,8 @@
         status={usage?.status ?? 'unavailable'}
         updated={usage?.updated ?? 0}
         {now}
+        {resizing}
+        segments={config?.limit_bar_segments ?? 16}
         format="dhm"
       />
     </div>
@@ -109,7 +125,7 @@
   header {
     display: flex;
     align-items: center;
-    gap: 18px;
+    gap: 8px;
     padding: 4px 12px;
     background: #17171a;
     border-bottom: 1px solid #2a2a2d;
@@ -124,12 +140,13 @@
     letter-spacing: 0.6px;
     color: #8a8a8e;
     flex-shrink: 0;
+    margin-right: 10px;
   }
   .limits {
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 18px;
+    gap: 8px;
     flex: 1;
     min-width: 0;
   }

@@ -8,39 +8,20 @@
     updated: number
     now: number
     format: 'hm' | 'dhm'
+    segments: number
+    resizing?: boolean
   }
 
-  let { bucket, status, updated, now, format }: Props = $props()
+  let { bucket, status, updated, now, format, segments, resizing = false }: Props = $props()
 
-  const SEGMENT_PX = 8
-  const PITCH_PX = SEGMENT_PX + 1
-
-  let trackEl: HTMLDivElement | undefined = $state()
-  let trackWidth = $state(0)
-
-  $effect(() => {
-    if (!trackEl) return
-    const obs = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        trackWidth = entry.contentRect.width
-      }
-    })
-    obs.observe(trackEl)
-    return () => obs.disconnect()
-  })
-
+  const segmentCount = $derived(Math.max(1, Math.floor(segments)))
   const hasData = $derived(bucket !== null)
   const utilization = $derived(hasData && bucket ? bucket.utilization : 0)
-  const totalSegments = $derived(Math.max(0, Math.floor(trackWidth / PITCH_PX)))
   const filledSegments = $derived(
-    utilization > 0 && totalSegments > 0
-      ? Math.max(
-          1,
-          Math.min(totalSegments, Math.round(utilization * totalSegments)),
-        )
+    utilization > 0
+      ? Math.max(1, Math.min(segmentCount, Math.round(utilization * segmentCount)))
       : 0,
   )
-  const fillWidthPx = $derived(filledSegments * PITCH_PX)
   const percentText = $derived(
     !hasData || !bucket
       ? '--%'
@@ -56,8 +37,8 @@
   const fillColor = $derived(
     utilization >= 0.85 ? '#b91c1c' : utilization >= 0.5 ? '#b45309' : '#047857',
   )
-  const labelText = $derived(format === 'hm' ? '5h limit' : '7d limit')
-  const tooltip = $derived(buildTooltip(status, bucket, updated, now, labelText))
+  const longLabel = $derived(format === 'hm' ? '5h limit' : '7d limit')
+  const tooltip = $derived(buildTooltip(status, bucket, updated, now, longLabel))
 
   function buildTooltip(
     s: UsageStatus,
@@ -100,32 +81,59 @@
   }
 </script>
 
-<div class="bar" title={tooltip}>
-  <div class="track" bind:this={trackEl}>
-    <div class="fill" style:width="{fillWidthPx}px" style:--fill-color={fillColor}></div>
+<div class="bar" class:resizing title={tooltip} data-tauri-drag-region>
+  <span class="cap cap-left" data-tauri-drag-region>{percentText}</span>
+  <div
+    class="segments"
+    style:--n={segmentCount}
+    style:--fill-color={fillColor}
+    data-tauri-drag-region
+  >
+    {#if filledSegments > 0}
+      <div
+        class="fill"
+        style:--filled={filledSegments}
+        data-tauri-drag-region
+      ></div>
+    {/if}
   </div>
-  <span class="pct">{percentText}</span>
-  <span class="time">{timeText}</span>
+  <span class="cap cap-right" data-tauri-drag-region>{timeText}</span>
 </div>
 
 <style>
   .bar {
-    position: relative;
-    height: 16px;
     display: flex;
     align-items: center;
-  }
-  .track {
-    position: relative;
-    flex: 1;
     height: 16px;
     min-width: 0;
-    background-color: #17171a;
-    background-image: linear-gradient(to right, #45454a 8px, transparent 8px);
-    background-size: 9px 100%;
-    background-repeat: repeat-x;
+    font-family: ui-monospace, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 10px;
+    line-height: 1;
     border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 3px;
+    overflow: hidden;
+  }
+  .bar.resizing {
+    background: #2a2a2d;
+  }
+  .bar.resizing > * {
+    visibility: hidden;
+  }
+  .segments {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 16px;
+    background-color: #17171a;
+    background-image: linear-gradient(
+      to right,
+      #45454a 0,
+      #45454a calc(100% - 1px),
+      transparent calc(100% - 1px)
+    );
+    background-size: calc((100% + 1px) / var(--n)) 100%;
+    background-repeat: repeat-x;
     overflow: hidden;
   }
   .fill {
@@ -133,30 +141,35 @@
     top: 0;
     bottom: 0;
     left: 0;
-    background-image: linear-gradient(to right, var(--fill-color) 8px, transparent 8px);
-    background-size: 9px 100%;
+    width: calc(var(--filled) * (100% + 1px) / var(--n) - 1px);
+    background-image: linear-gradient(
+      to right,
+      var(--fill-color) 0,
+      var(--fill-color) calc(100% - 1px),
+      transparent calc(100% - 1px)
+    );
+    background-size: calc((100% + 1px) / var(--filled)) 100%;
     background-repeat: repeat-x;
-    transition: width 280ms ease;
+    transition: width 180ms ease;
   }
-  .pct, .time {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    font-family: ui-monospace, Consolas, monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: 10px;
-    font-weight: 700;
-    color: #f5f5f7;
-    background: rgba(0, 0, 0, 0.65);
-    padding: 1px 3px;
-    border-radius: 2px;
+  .cap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+    padding: 0 5px;
+    background: #2a2a2d;
+    color: #8a8a8e;
+    font-weight: 600;
+    white-space: nowrap;
     pointer-events: none;
-    line-height: 1;
   }
-  .pct {
-    left: 2px;
+  .cap-left {
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+    min-width: calc(4ch + 10px);
   }
-  .time {
-    right: 2px;
+  .cap-right {
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    min-width: calc(7ch + 10px);
   }
 </style>

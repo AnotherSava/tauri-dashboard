@@ -27,6 +27,7 @@ export interface Config {
   context_bar_thresholds: ContextBarThreshold[]
   benign_closers: string[]
   usage_limits_poll_interval_seconds: number
+  limit_bar_segments: number
 }
 
 export type UsageStatus = 'ok' | 'unavailable' | 'auth_expired' | 'network_error'

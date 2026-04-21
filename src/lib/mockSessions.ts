@@ -96,4 +96,5 @@ export const mockConfig: Config = {
   ],
   benign_closers: ["What's next?", 'Anything else?'],
   usage_limits_poll_interval_seconds: 600,
+  limit_bar_segments: 16,
 }
