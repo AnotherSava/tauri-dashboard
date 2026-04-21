@@ -1,30 +1,37 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import SessionList from './lib/components/SessionList.svelte'
+  import LimitBar from './lib/components/LimitBar.svelte'
   import {
     getConfig,
     getSessions,
+    getUsageLimits,
     hideWindow,
     onConfigUpdated,
     onSessionsUpdated,
+    onUsageLimitsUpdated,
     showWindow,
   } from './lib/api'
-  import type { AgentSession, Config } from './lib/types'
+  import type { AgentSession, Config, UsageLimits } from './lib/types'
 
   let sessions = $state<AgentSession[]>([])
   let config = $state<Config | null>(null)
+  let usage = $state<UsageLimits | null>(null)
   let now = $state(Date.now())
 
   onMount(() => {
     let unlistenSessions: (() => void) | undefined
     let unlistenConfig: (() => void) | undefined
+    let unlistenUsage: (() => void) | undefined
 
     ;(async () => {
       try {
         config = await getConfig()
         sessions = await getSessions()
+        usage = await getUsageLimits()
         unlistenSessions = await onSessionsUpdated((s) => (sessions = s))
         unlistenConfig = await onConfigUpdated((c) => (config = c))
+        unlistenUsage = await onUsageLimitsUpdated((u) => (usage = u))
       } catch (err) {
         console.error('failed to initialize', err)
       } finally {
@@ -42,6 +49,7 @@
       clearInterval(tickId)
       unlistenSessions?.()
       unlistenConfig?.()
+      unlistenUsage?.()
     }
   })
 
@@ -53,6 +61,22 @@
 <div class="widget">
   <header data-tauri-drag-region>
     <span class="title" data-tauri-drag-region>AI AGENTS</span>
+    <div class="limits">
+      <LimitBar
+        bucket={usage?.five_hour ?? null}
+        status={usage?.status ?? 'unavailable'}
+        updated={usage?.updated ?? 0}
+        {now}
+        format="hm"
+      />
+      <LimitBar
+        bucket={usage?.seven_day ?? null}
+        status={usage?.status ?? 'unavailable'}
+        updated={usage?.updated ?? 0}
+        {now}
+        format="dhm"
+      />
+    </div>
     <button class="hide-btn" onclick={onHide} aria-label="Hide to tray" title="Hide to tray">×</button>
   </header>
   {#if config}
@@ -85,8 +109,8 @@
   header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 6px 12px;
+    gap: 18px;
+    padding: 4px 12px;
     background: #17171a;
     border-bottom: 1px solid #2a2a2d;
     cursor: grab;
@@ -99,6 +123,19 @@
     font-weight: 600;
     letter-spacing: 0.6px;
     color: #8a8a8e;
+    flex-shrink: 0;
+  }
+  .limits {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 18px;
+    flex: 1;
+    min-width: 0;
+  }
+  .limits > :global(*) {
+    flex: 1 1 0;
+    min-width: 0;
   }
   .hide-btn {
     background: transparent;
@@ -111,6 +148,8 @@
     border-radius: 3px;
     opacity: 0;
     transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+    margin-left: auto;
+    flex-shrink: 0;
   }
   header:hover .hide-btn {
     opacity: 1;

@@ -26,6 +26,21 @@ export interface Config {
   context_window_tokens: Record<string, number>
   context_bar_thresholds: ContextBarThreshold[]
   benign_closers: string[]
+  usage_limits_poll_interval_seconds: number
+}
+
+export type UsageStatus = 'ok' | 'unavailable' | 'auth_expired' | 'network_error'
+
+export interface LimitBucket {
+  utilization: number
+  resets_at: number
+}
+
+export interface UsageLimits {
+  five_hour: LimitBucket | null
+  seven_day: LimitBucket | null
+  status: UsageStatus
+  updated: number
 }
 
 export const stateLabel: Record<Status, string> = {
@@ -57,6 +72,23 @@ export function formatTime(ms: number): string {
 
 export function formatTokens(n: number): string {
   return Math.ceil(n / 1000).toString()
+}
+
+export function formatCompactRemaining(ms: number | null, mode: 'hm' | 'dhm'): string {
+  if (ms === null || !Number.isFinite(ms) || ms <= 0) {
+    return mode === 'dhm' ? '-:--:--' : '--:--'
+  }
+  const totalMin = Math.floor(ms / 60_000)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  if (mode === 'dhm') {
+    const d = Math.floor(totalMin / 1440)
+    const h = Math.floor((totalMin % 1440) / 60)
+    const m = totalMin % 60
+    return `${d}:${pad(h)}:${pad(m)}`
+  }
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return `${pad(h)}:${pad(m)}`
 }
 
 export function tokenColor(session: AgentSession, config: Config): string {

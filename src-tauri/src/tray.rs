@@ -175,14 +175,14 @@ fn toggle_autostart(app: &AppHandle) {
 
 fn open_path(app: &AppHandle, filename: &str) {
     let Ok(dir) = app.path().app_data_dir() else {
+        tracing::warn!(filename, "open_path: app_data_dir unavailable");
         return;
     };
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(filename);
-    let path_str = path.to_string_lossy().to_string();
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", "", &path_str])
-        .spawn();
+    if let Err(e) = open::that(&path) {
+        tracing::warn!(?e, path = %path.display(), "open_path failed");
+    }
 }
 
 fn show_about(app: &AppHandle) {

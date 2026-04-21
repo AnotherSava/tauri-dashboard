@@ -95,4 +95,5 @@ export const mockConfig: Config = {
     { percent: 85, color: '#c64a4a' },
   ],
   benign_closers: ["What's next?", 'Anything else?'],
+  usage_limits_poll_interval_seconds: 600,
 }
