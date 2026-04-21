@@ -94,7 +94,7 @@ Any language with an HTTP client works the same way — build the JSON, POST it,
 
 ### Standard features
 
-- Always-on-top window, draggable by the header strip.
+- Always-on-top tray-only window (no taskbar entry), draggable by the header strip; a hover-revealed × in the header hides it back to tray.
 - System tray with show/hide toggle, always-on-top toggle, autostart toggle, save-position-on-exit toggle, open-config-file and open-log-file shortcuts.
 - Color-coded state pills with a pulse animation on WAIT and ERROR.
 - Sticky original-prompt label across approval cycles; same trigger resets the WORK accumulator on a new task.

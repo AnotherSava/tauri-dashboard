@@ -4,6 +4,7 @@
   import {
     getConfig,
     getSessions,
+    hideWindow,
     onConfigUpdated,
     onSessionsUpdated,
     showWindow,
@@ -43,11 +44,16 @@
       unlistenConfig?.()
     }
   })
+
+  function onHide() {
+    hideWindow().catch((err) => console.error('hide failed', err))
+  }
 </script>
 
 <div class="widget">
   <header data-tauri-drag-region>
     <span class="title" data-tauri-drag-region>AI AGENTS</span>
+    <button class="hide-btn" onclick={onHide} aria-label="Hide to tray" title="Hide to tray">×</button>
   </header>
   {#if config}
     <SessionList {sessions} {config} {now} />
@@ -79,6 +85,7 @@
   header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     padding: 6px 12px;
     background: #17171a;
     border-bottom: 1px solid #2a2a2d;
@@ -92,5 +99,24 @@
     font-weight: 600;
     letter-spacing: 0.6px;
     color: #8a8a8e;
+  }
+  .hide-btn {
+    background: transparent;
+    border: 0;
+    padding: 0 6px;
+    color: #8a8a8e;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  }
+  header:hover .hide-btn {
+    opacity: 1;
+  }
+  .hide-btn:hover {
+    background: #2a2a2d;
+    color: #e8e8ea;
   }
 </style>
