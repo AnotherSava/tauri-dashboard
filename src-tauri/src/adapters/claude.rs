@@ -16,7 +16,6 @@ use crate::state::{SetInput, Status};
 ///
 /// Known events: `UserPromptSubmit`, `Stop`, `SessionStart`, `Notification`,
 /// `SessionEnd`. Unknown events → [`AdapterOutput::Ignore`].
-#[allow(dead_code)]
 pub fn dispatch(event: &str, payload: &Value, cfg: &Config) -> AdapterOutput {
     let cwd = payload.get("cwd").and_then(|v| v.as_str());
     let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("");

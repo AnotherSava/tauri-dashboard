@@ -15,7 +15,6 @@ use crate::state::SetInput;
 pub mod claude;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum AdapterOutput {
     /// Apply a state update. `transcript_path`, when present, is handed to
     /// the log-watcher registry by the HTTP layer after the state update.
@@ -31,7 +30,6 @@ pub enum AdapterOutput {
 }
 
 /// Dispatch an incoming event to the correct adapter by client id.
-#[allow(dead_code)]
 pub fn dispatch(
     client: &str,
     event: &str,

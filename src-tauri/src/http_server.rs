@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager};
 
 use std::path::PathBuf;
 
+use crate::adapters::{self, AdapterOutput};
 use crate::commands::{emit_config_updated, emit_sessions_updated, now_ms};
 use crate::config::{Config, ConfigState};
 use crate::config_watcher::apply_config_to_window;
@@ -29,6 +30,7 @@ pub async fn run(app: AppHandle, port: u16) {
 
     let router = Router::new()
         .route("/api/status", post(post_status))
+        .route("/api/event", post(post_event))
         .with_state(app);
 
     if let Err(e) = axum::serve(listener, router).await {
@@ -62,6 +64,17 @@ struct SetPayload {
 #[derive(Deserialize, Debug)]
 struct ClearPayload {
     id: String,
+}
+
+/// Incoming wire shape for the adapter-dispatched `/api/event` endpoint.
+/// The hook forwards Claude Code's raw lifecycle payload; the server's
+/// `adapters::dispatch` turns it into a `SetInput` / `Clear` / `Ignore`.
+#[derive(Deserialize, Debug)]
+struct EventRequest {
+    client: String,
+    event: String,
+    #[serde(default)]
+    payload: serde_json::Value,
 }
 
 /// Merge a JSON patch (the body of a `config` action minus the `action` key)
@@ -142,5 +155,71 @@ async fn post_status(
         }
     }
     emit_sessions_updated(&app);
+    StatusCode::NO_CONTENT
+}
+
+async fn post_event(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(req): Json<EventRequest>,
+) -> StatusCode {
+    // CSRF guard — same policy as post_status.
+    if let Some(origin) = headers.get("origin") {
+        match origin.to_str() {
+            Ok("null") => {}
+            _ => return StatusCode::FORBIDDEN,
+        }
+    }
+
+    let Some(state) = app.try_state::<AppState>() else {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    };
+    let Some(cfg_state) = app.try_state::<ConfigState>() else {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    };
+    let cfg = cfg_state.snapshot();
+
+    let output = adapters::dispatch(&req.client, &req.event, &req.payload, &cfg);
+
+    match output {
+        AdapterOutput::Set { input, transcript_path } => {
+            tracing::debug!(
+                client = %req.client,
+                event = %req.event,
+                chat_id = %input.id,
+                status = ?input.status,
+                label = ?input.label,
+                "event -> set"
+            );
+            let chat_id = input.id.clone();
+            state.apply_set(input, now_ms());
+            if let Some(tp) = transcript_path {
+                if let Some(reg) = app.try_state::<WatcherRegistry>() {
+                    reg.start(app.clone(), chat_id, tp);
+                }
+            }
+            emit_sessions_updated(&app);
+        }
+        AdapterOutput::Clear { id } => {
+            tracing::debug!(
+                client = %req.client,
+                event = %req.event,
+                chat_id = %id,
+                "event -> clear"
+            );
+            state.apply_clear(&id);
+            if let Some(reg) = app.try_state::<WatcherRegistry>() {
+                reg.stop(&id);
+            }
+            emit_sessions_updated(&app);
+        }
+        AdapterOutput::Ignore => {
+            tracing::debug!(
+                client = %req.client,
+                event = %req.event,
+                "event -> ignored"
+            );
+        }
+    }
     StatusCode::NO_CONTENT
 }
