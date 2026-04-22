@@ -17,8 +17,8 @@ pub fn init(log_dir: &Path) -> LogGuard {
 
     fmt()
         .with_env_filter(filter)
-        .json()
         .with_writer(writer)
+        .with_ansi(false)
         .try_init()
         .ok();
 

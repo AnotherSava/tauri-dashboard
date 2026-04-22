@@ -35,4 +35,4 @@ After installation, configure the agents you want to track:
 
 ## Settings
 
-All settings live in `config.json` under the app data directory (`%APPDATA%\com.anothersava.ai-agent-dashboard\` on Windows). The tray menu has an "Open config file" shortcut that launches it in the default editor, and the widget hot-reloads the file on save — no restart needed except when changing the HTTP server port.
+All settings live in `config.json` under the app data directory (`%APPDATA%\com.anothersava.ai-agent-dashboard\` on Windows). The tray menu has an "Open config/logs location" shortcut that opens the folder, and the widget hot-reloads `config.json` on save — no restart needed except when changing the HTTP server port.

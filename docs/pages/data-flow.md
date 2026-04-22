@@ -76,7 +76,7 @@ Tauri commands have two possible targets: native window/tray APIs (`hide_window`
 
 ## Path 4 — External config edits
 
-1. User edits `config.json` directly (via the "Open config file" tray shortcut or any editor).
+1. User edits `config.json` directly (via the "Open config/logs location" tray shortcut or any editor).
 2. `config_watcher` — a `notify::RecommendedWatcher` on the config directory — receives a `Modify` event.
 3. The 150ms debouncer waits for any rename-based atomic writes to settle.
 4. `Config::load_or_default` re-reads the file. Serde serializes both the new and current in-memory configs to JSON strings; if they're byte-identical, the reload is skipped — this is how our own tray writes avoid re-triggering the reload path.

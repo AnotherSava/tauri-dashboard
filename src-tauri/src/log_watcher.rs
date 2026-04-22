@@ -234,7 +234,7 @@ async fn watch_loop(app: AppHandle, chat_id: String, path: PathBuf) {
     let parent = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
         _ => {
-            tracing::warn!(?path, chat_id, "transcript path has no parent dir");
+            tracing::warn!(path = %path.display(), chat_id, "transcript path has no parent dir");
             return;
         }
     };
@@ -254,15 +254,15 @@ async fn watch_loop(app: AppHandle, chat_id: String, path: PathBuf) {
     ) {
         Ok(w) => w,
         Err(e) => {
-            tracing::error!(?path, error = %e, "transcript watcher create failed");
+            tracing::error!(path = %path.display(), error = %e, "transcript watcher create failed");
             return;
         }
     };
     if let Err(e) = watcher.watch(&parent, RecursiveMode::NonRecursive) {
-        tracing::error!(?parent, error = %e, "transcript watch failed");
+        tracing::error!(parent = %parent.display(), error = %e, "transcript watch failed");
         return;
     }
-    tracing::debug!(?path, chat_id, "watching transcript");
+    tracing::debug!(path = %path.display(), chat_id, "watching transcript");
 
     let state = Arc::new(Mutex::new(DrainState {
         position: 0,

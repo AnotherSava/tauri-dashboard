@@ -13,8 +13,7 @@ const MENU_SHOW_HIDE: &str = "show_hide";
 const MENU_ALWAYS_ON_TOP: &str = "always_on_top";
 const MENU_SAVE_POSITION: &str = "save_position";
 const MENU_AUTOSTART: &str = "autostart";
-const MENU_OPEN_CONFIG: &str = "open_config";
-const MENU_OPEN_LOG: &str = "open_log";
+const MENU_OPEN_DATA_DIR: &str = "open_data_dir";
 const MENU_ABOUT: &str = "about";
 const MENU_QUIT: &str = "quit";
 
@@ -49,8 +48,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         app, MENU_AUTOSTART, "Open on system start", true, autostart_initial, None::<&str>,
     )?;
 
-    let open_config = MenuItem::with_id(app, MENU_OPEN_CONFIG, "Open config file", true, None::<&str>)?;
-    let open_log = MenuItem::with_id(app, MENU_OPEN_LOG, "Open log file", true, None::<&str>)?;
+    let open_data_dir = MenuItem::with_id(app, MENU_OPEN_DATA_DIR, "Open config/logs location", true, None::<&str>)?;
     let about = MenuItem::with_id(app, MENU_ABOUT, "About", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
 
@@ -63,8 +61,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             &save_position,
             &autostart,
             &PredefinedMenuItem::separator(app)?,
-            &open_config,
-            &open_log,
+            &open_data_dir,
             &PredefinedMenuItem::separator(app)?,
             &about,
             &quit,
@@ -111,8 +108,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         MENU_ALWAYS_ON_TOP => toggle_always_on_top(app),
         MENU_SAVE_POSITION => toggle_save_position(app),
         MENU_AUTOSTART => toggle_autostart(app),
-        MENU_OPEN_CONFIG => open_path(app, "config.json"),
-        MENU_OPEN_LOG => open_path(app, "widget.log"),
+        MENU_OPEN_DATA_DIR => open_data_dir(app),
         MENU_ABOUT => show_about(app),
         MENU_QUIT => app.exit(0),
         _ => {}
@@ -173,15 +169,14 @@ fn toggle_autostart(app: &AppHandle) {
     }
 }
 
-fn open_path(app: &AppHandle, filename: &str) {
+fn open_data_dir(app: &AppHandle) {
     let Ok(dir) = app.path().app_data_dir() else {
-        tracing::warn!(filename, "open_path: app_data_dir unavailable");
+        tracing::warn!("open_data_dir: app_data_dir unavailable");
         return;
     };
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(filename);
-    if let Err(e) = open::that(&path) {
-        tracing::warn!(?e, path = %path.display(), "open_path failed");
+    if let Err(e) = open::that(&dir) {
+        tracing::warn!(?e, path = %dir.display(), "open_data_dir failed");
     }
 }
 

@@ -50,8 +50,8 @@ pub fn run() {
             let config_path = app_data.join("config.json");
 
             let config_state = ConfigState::new(config_path.clone());
-            // Ensure a config.json exists on first run so tray "Open config
-            // file" and external editing both work without further steps.
+            // Ensure a config.json exists on first run so external editing
+            // works without further steps.
             if !config_path.exists() {
                 let _ = config_state.save_to_disk();
             }

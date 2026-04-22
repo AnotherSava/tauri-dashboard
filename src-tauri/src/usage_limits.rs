@@ -154,9 +154,14 @@ async fn fetch_usage(
         let snippet = body.chars().take(200).collect::<String>();
         return Err(PollError::HttpStatus(status, snippet));
     }
-    resp.json::<UsageResponse>()
+    let body = resp
+        .text()
         .await
-        .map_err(|e| PollError::JsonParse(e.to_string()))
+        .map_err(|e| PollError::Network(e.to_string()))?;
+    serde_json::from_str::<UsageResponse>(&body).map_err(|e| {
+        let snippet: String = body.chars().take(300).collect();
+        PollError::JsonParse(format!("{e}; body={snippet}"))
+    })
 }
 
 fn to_bucket(wire: UsageBucketWire) -> LimitBucket {
