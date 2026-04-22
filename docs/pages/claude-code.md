@@ -40,11 +40,11 @@ Copy `integrations/claude_hook.py` — distributed with the widget source — an
 ```json
 {
   "hooks": {
-    "SessionStart":      [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py idle"}]}],
-    "UserPromptSubmit":  [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py working"}]}],
-    "Notification":      [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py idle"}]}],
-    "Stop":              [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py done"}]}],
-    "SessionEnd":        [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py clear"}]}]
+    "SessionStart":      [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py"}]}],
+    "UserPromptSubmit":  [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py"}]}],
+    "Notification":      [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py"}]}],
+    "Stop":              [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py"}]}],
+    "SessionEnd":        [{"hooks": [{"type": "command", "command": "python3 <repo>/integrations/claude_hook.py"}]}]
   }
 }
 ```
@@ -52,6 +52,8 @@ Copy `integrations/claude_hook.py` — distributed with the widget source — an
 Replace `<repo>` with the absolute path to your clone of this repo. Restart Claude Code — new sessions will appear in the widget.
 
 Optional: set `projects_root` in `config.json` to the folder your projects live under, so session ids become short folder-relative names instead of bare folder basenames.
+
+The hook talks to the widget at `http://127.0.0.1:9077` by default. To use a different port or host, export `TAURI_DASHBOARD_URL` (e.g. `TAURI_DASHBOARD_URL=http://127.0.0.1:9100`) before launching Claude Code.
 
 ### Features
 

@@ -38,8 +38,7 @@ Compiles the Rust backend, starts Vite on `localhost:1420`, and launches the nat
 - `npm run tauri build` — release build; NSIS installer lands in `src-tauri/target/release/bundle/nsis/`.
 - `npm run check` — TypeScript + Svelte check (no build).
 - `npm run tauri icon <path/to/1024.png>` — regenerate the Windows / Linux / macOS icon set from a source PNG.
-- `cargo test --manifest-path src-tauri/Cargo.toml --lib` — Rust unit tests (state machine, transcript parser, merge policy).
-- `python tests/test_claude_hook.py -v` — Python hook tests (chat-id derivation, classify, benign-closer logic, config path resolution).
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib` — Rust unit tests (state machine, transcript parser, merge policy, Claude adapter, label policy).
 
 ## Architecture
 
@@ -81,9 +80,7 @@ tauri-dashboard/
 │       ├── usage_limits.rs              Anthropic OAuth usage poller (5h / 7d buckets)
 │       └── logging.rs                   tracing subscriber → widget.log
 ├── integrations/
-│   └── claude_hook.py                   Claude Code hook: classify + POST
-├── tests/
-│   └── test_claude_hook.py              unittest: 50 cases
+│   └── claude_hook.py                   thin Claude Code hook — forwards stdin payload to /api/event
 ├── docs/                                this site
 └── .github/workflows/release.yml        CI: build NSIS installer on tag push
 ```
@@ -104,11 +101,9 @@ tauri-dashboard/
 
 Rust tests live inline in `#[cfg(test)]` modules next to the code they cover:
 
-- `state::tests` — 11 cases covering the sticky-label machine, working-time accumulator, and error transitions.
-- `log_watcher::tests` — 24 cases covering the transcript parser (`infer_state`, `split_complete`) and the upgrade-only merge policy.
-
-Python tests live under `tests/`:
-
-- `test_claude_hook.py` — 50 cases covering chat-id derivation, `classify` / `build_body`, benign-closer logic, config loading, widget-URL derivation, and per-platform config path resolution.
+- `state::tests` — sticky-label machine, working-time accumulator, error transitions.
+- `label_policy::tests` — the `(label, original_prompt)` decision extracted from `apply_set`.
+- `log_watcher::tests` — the transcript parser (`infer_state`, `split_complete`) and the upgrade-only merge policy.
+- `adapters::claude::tests` — `classify`, `derive_chat_id`, `clean_prompt`, `last_assistant_ends_with_question`, and the outer `dispatch`.
 
 CI (`.github/workflows/release.yml`) runs Rust tests before bundling on every tag push, so a broken state machine can't ship a release.
