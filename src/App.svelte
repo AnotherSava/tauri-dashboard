@@ -112,8 +112,8 @@
   header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 4px 12px;
+    gap: 4px;
+    padding: 4px 4px 4px 12px;
     background: #17171a;
     border-bottom: 1px solid #2a2a2d;
     cursor: grab;
