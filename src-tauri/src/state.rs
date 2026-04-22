@@ -29,9 +29,9 @@ pub struct AgentSession {
 pub struct SetInput {
     pub id: String,
     pub status: Status,
-    /// None = preserve prior label. The Python hook omits this field when it
-    /// has no new label to report (e.g. transitioning to `working` without a
-    /// fresh prompt), and expects the widget to keep whatever was there.
+    /// None = preserve prior label. Adapters emit None when the incoming event
+    /// has no fresh label to report (e.g. transitioning to `working` without a
+    /// new prompt); the state layer keeps whatever was there.
     pub label: Option<String>,
     pub source: Option<String>,
     pub model: Option<String>,

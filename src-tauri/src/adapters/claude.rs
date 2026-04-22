@@ -1,8 +1,9 @@
 //! Claude Code event adapter.
 //!
-//! Ports the decision logic from `integrations/claude_hook.py` into the app so
-//! the hook can shrink to a thin "forward Claude's payload over HTTP" script.
-//! Behavior is preserved verbatim — the test cases mirror `tests/test_claude_hook.py`.
+//! Owns the decision logic for Claude Code lifecycle events: event-to-status
+//! mapping, chat-id derivation from cwd / projects_root, prompt cleaning, and
+//! transcript question-detection. The `integrations/claude_hook.py` shim is a
+//! pure transport layer — it hands payloads to this module via `/api/event`.
 
 use std::path::{Path, PathBuf};
 

@@ -12,12 +12,13 @@ End-to-end: what happens when a Claude Code hook fires, when a transcript file g
 ## The three input sources
 
 ```
-┌──────────────────┐    POST /api/status    ┌────────────────┐
-│  External agent  │──────────────────────▶ │  axum (Rust)   │
-│  (hook, curl,    │                        │  :9077         │
-│   script)        │                        └───────┬────────┘
-└──────────────────┘                                │ apply_set
-                                                    │ / apply_clear
+┌──────────────────┐    POST /api/event     ┌────────────────┐
+│  Claude Code     │──────────────────────▶ │  axum (Rust)   │
+│  (hook forwards  │                        │  :9077         │
+│   raw payload)   │                        └───────┬────────┘
+└──────────────────┘                                │ adapters::dispatch
+                                                    │ → apply_set
+                                                    │   / apply_clear
                                                     ▼
 ┌──────────────────┐   notify::Event       ┌────────────────┐
 │  transcript      │─────────────────────▶ │  AppState      │     app.emit
@@ -41,14 +42,14 @@ End-to-end: what happens when a Claude Code hook fires, when a transcript file g
 
 Every mutation to session state funnels through `state::apply_set` or `state::apply_clear` so the sticky-label rules, working-time accumulator, and upgrade-only merge policy are enforced in one place regardless of origin.
 
-## Path 1 — Hook POSTs status
+## Path 1 — Hook POSTs event
 
-1. Claude Code fires a lifecycle event (`UserPromptSubmit`, `Stop`, etc.). The hook command spawns `python claude_hook.py <arg>` and pipes the event payload to stdin.
-2. `claude_hook.py` reads `config.json` from the widget's app data dir for `projects_root`, `benign_closers`, `server_port`. Derives the session `id` from `cwd` relative to `projects_root`. Calls `classify(arg, payload, benign_closers)` to map argv + payload to a `(status, label)` pair.
-3. `build_body(...)` produces the POST body: `{action, id, status, source, label?, transcript_path?, updated}`.
-4. `POST /api/status` hits the axum handler. Origin guard rejects non-null cross-origin requests. Body deserializes to `StatusRequest::Set`.
-5. `AppState::apply_set` runs. If status transitions out of `working`, it accumulates elapsed time into `working_accumulated_ms`. If the transition is a task boundary (`done` / `idle` → `working`), it re-captures `original_prompt` and zeroes the accumulator. Otherwise the existing `original_prompt` is preserved.
-6. If the payload carries `transcript_path`, `WatcherRegistry::start` spawns a per-session tokio task with a `notify::RecommendedWatcher` on the transcript's parent directory.
+1. Claude Code fires a lifecycle event (`UserPromptSubmit`, `Stop`, etc.). The hook command spawns `python claude_hook.py` and pipes the event payload to stdin.
+2. `claude_hook.py` reads the payload, extracts `hook_event_name`, and POSTs `{client: "claude", event: <name>, payload: <verbatim>}` to `$TAURI_DASHBOARD_URL/api/event` (default `http://127.0.0.1:9077/api/event`). The hook does no classification or config reading.
+3. `POST /api/event` hits the axum handler. Origin guard rejects non-null cross-origin requests.
+4. `adapters::dispatch` routes by `client`; `adapters::claude::dispatch` matches on `event` and produces an `AdapterOutput::Set { input, transcript_path } | Clear { id } | Ignore`. All chat-id derivation, prompt cleaning, and transcript question-detection happen here.
+5. For `Set`, `label_policy::select` decides the `(label, original_prompt)` pair and `AppState::apply_set` runs: if status transitions out of `working`, it accumulates elapsed time into `working_accumulated_ms`; if the transition is a task boundary (`done` / `idle` → `working`), it zeroes the accumulator; otherwise existing timers are preserved.
+6. If `transcript_path` is present, `WatcherRegistry::start` spawns a per-session tokio task with a `notify::RecommendedWatcher` on the transcript's parent directory.
 7. `emit_sessions_updated` broadcasts the fresh snapshot on the `sessions_updated` event.
 8. The Svelte frontend's `listen` callback replaces its `$state` sessions array, Svelte's reactivity re-renders the list, the row updates within a frame.
 

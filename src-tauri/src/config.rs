@@ -12,14 +12,12 @@ pub struct Config {
     pub window_position: Option<WindowPosition>,
     pub context_window_tokens: HashMap<String, u64>,
     pub context_bar_thresholds: Vec<Threshold>,
-    /// Read by `integrations/claude_hook.py`: conversational closers that end
-    /// with '?' but shouldn't register as awaiting (e.g. "What's next?"). The
-    /// widget itself doesn't consume this field.
+    /// Read by `adapters::claude`: conversational closers that end with '?'
+    /// but shouldn't register as awaiting (e.g. "What's next?").
     pub benign_closers: Vec<String>,
-    /// Read by `integrations/claude_hook.py`: used to derive a friendly
-    /// chat_id from `cwd`. When a Claude session starts under this directory,
-    /// the relative path is used as the session id. None = always use the
-    /// basename of cwd.
+    /// Read by `adapters::claude`: used to derive a friendly chat_id from
+    /// `cwd`. When a Claude session starts under this directory, the relative
+    /// path is used as the session id. None = always use the basename of cwd.
     pub projects_root: Option<String>,
     /// Channel notifications (Telegram today, desktop later). Missing object =
     /// disabled entirely; missing channel inside = that channel disabled.

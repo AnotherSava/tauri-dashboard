@@ -7,95 +7,64 @@ title: HTTP API
 
 ---
 
-The widget listens on `http://127.0.0.1:9077` (default) for status updates. Any tool that can POST JSON — curl, Python, a CI job, a background agent — can report status without any library dependency.
+The widget listens on `http://127.0.0.1:9077` (default) for lifecycle events from external agents. One endpoint, one envelope shape, adapter-dispatched on the server side.
 
 ### Endpoint
 
-`POST /api/status` with `Content-Type: application/json`. Returns `204 No Content` on success, `403` if the `Origin` header is a real web origin (blocks browser XHR), `400` on malformed JSON.
+`POST /api/event` with `Content-Type: application/json`. Returns `204 No Content` on success, `403` if the `Origin` header is a real web origin (blocks browser XHR), `400` on malformed JSON.
 
-### Actions
-
-The body's `action` field selects the operation. All other fields depend on the action.
-
-**`set`** — create or update a row.
+### Envelope
 
 ```json
 {
-  "action": "set",
-  "id": "my-task",
-  "status": "working",
-  "label": "Building the report",
-  "source": "script",
-  "inputTokens": 42000,
-  "model": "claude-opus-4-7",
-  "transcript_path": "/abs/path/to/transcript.jsonl"
+  "client": "claude",
+  "event": "UserPromptSubmit",
+  "payload": { ... raw agent payload ... }
 }
 ```
 
-- `id` — session identifier; subsequent `set`s with the same id update the row.
-- `status` — one of `working`, `awaiting`, `idle`, `done`, `error`.
-- `label` — optional. Omitting it preserves whatever label the row already had, which is useful when you want to change only status.
-- `source` — free-form, defaults to `claude-code`. Preserved for future multi-agent styling.
-- `inputTokens` / `model` — optional token count and model name. The token count is colored by `%` of the model's context window (looked up in `config.json`).
-- `transcript_path` — optional. When provided, the widget starts tailing that JSONL and pulls model / token info live from assistant turns.
+- `client` — identifies which adapter should handle this event. Today: `"claude"`. New clients are new server-side adapter modules; the envelope shape never grows a per-client variant.
+- `event` — the agent's own event name (for Claude Code this is the `hook_event_name` field from its hook payload: `SessionStart` / `UserPromptSubmit` / `Notification` / `Stop` / `SessionEnd`).
+- `payload` — opaque to the HTTP layer; forwarded verbatim to the adapter. The adapter knows what fields it cares about.
 
-**`clear`** — remove a row.
+### Claude Code events
 
-```json
-{"action": "clear", "id": "my-task"}
-```
+The `claude` adapter recognizes five events. Other event names are silently ignored.
 
-Stops any transcript watcher attached to that session.
+| `event`             | Derived status                                                                                                                | Label source                                            |
+|---                  |---                                                                                                                            |---                                                      |
+| `SessionStart`      | `idle`                                                                                                                        | —                                                       |
+| `UserPromptSubmit`  | `working`                                                                                                                     | `payload.prompt` (whitespace-collapsed, chrome-stripped)|
+| `Notification`      | `awaiting` (usually); `done` if `notification_type == "idle_prompt"` and the last assistant turn doesn't end with `?`         | `"needs approval: <tool>"` / `"plan approval"` / the raw `message` (truncated to 60 chars) |
+| `Stop`              | `done`; flips to `awaiting` if the last assistant turn ends with `?` (minus configured benign closers)                        | `"has a question"` when flipped                         |
+| `SessionEnd`        | — (emits a `clear`, removing the row)                                                                                         | —                                                       |
 
-**`config`** — update widget configuration.
-
-```json
-{"action": "config", "always_on_top": false}
-```
-
-Any keys in the body (other than `action`) are merged into the live config and persisted to `config.json`. The widget applies the change immediately — `always_on_top` flips, the tray check marks sync. Port changes persist but don't take effect until restart.
+The adapter derives a friendly `chat_id` from `payload.cwd` and the `projects_root` config setting; see the [Claude Code page](claude-code) for chat-id rules.
 
 ### Sticky label state machine
 
-A session's *display* label is not always the latest `label` you sent:
+A session's *display* label is not always the latest `label` produced by the adapter:
 
-- `status = working`, `done`, or `idle`: the widget shows the **original prompt** (the label from the first `set working` that started the current task), falling back to the latest `label` if none was captured.
+- `status = working`, `done`, or `idle`: the widget shows the **original prompt** (the label captured when the current task started), falling back to the latest `label` if none was captured.
 - `status = awaiting`: the widget shows the **current label** (e.g. the question being asked).
 - `status = error`: the widget shows the current label (the error message).
 
-A task boundary — transitioning from `done` or `idle` into `working` — resets the original prompt to whatever label the boundary `set` carried. An approval cycle — `working → awaiting → working` — preserves it. This lets you send short status noises like `"yes"` or `""` during an approval cycle without clobbering the user-visible task description.
+A task boundary — transitioning from `done` or `idle` into `working` — resets the original prompt to whatever label the boundary event carried. An approval cycle — `working → awaiting → working` — preserves it. This is what keeps "fix foo.py" visible on screen while Claude asks for a bash approval, and what flips it back to a fresh prompt after the task finishes.
 
-If you POST `set` with **no `label` field**, the row keeps its previous label. Handy when toggling `status` on an already-running session.
+When an adapter emits `label: None` on a `set`, the row keeps its previous label. Useful when the adapter is just changing status without a new description.
 
-### Examples
+### Port
 
-Curl:
+The widget listens on `server_port` from `config.json` (default 9077). The Claude hook resolves its URL from `$TAURI_DASHBOARD_URL`, falling back to `http://127.0.0.1:9077`.
 
-```bash
-curl -X POST http://127.0.0.1:9077/api/status \
-  -H 'Content-Type: application/json' \
-  -d '{"action":"set","id":"backup","status":"working","label":"nightly backup"}'
+### Adding a new client
 
-# ... do work ...
-
-curl -X POST http://127.0.0.1:9077/api/status \
-  -H 'Content-Type: application/json' \
-  -d '{"action":"set","id":"backup","status":"done","label":"12 GB archived"}'
-```
-
-Any language with an HTTP client works the same way — build the JSON, POST it, move on.
-
-### Features
-
-- **Idempotent `set`**: same `id` updates in place; different `id`s coexist as separate rows.
-- **Origin-guarded**: non-null `Origin` headers get `403`, blocking rogue web pages from flooding your widget.
-- **Partial updates**: omit fields you don't want to change (except `id` and `status`, which are required).
-- **Port configurable**: change `server_port` in `config.json` and restart.
+Writing a new adapter is a ~100 LOC pure Rust function: `src-tauri/src/adapters/<your_client>.rs` exposing `dispatch(event, payload, cfg) -> AdapterOutput`, plus a match arm in `adapters::dispatch`. See `src-tauri/src/adapters/claude.rs` for the reference implementation. No HTTP layer changes — the envelope already carries `client` as the discriminator.
 
 ### Standard features
 
 - Always-on-top tray-only window (no taskbar entry), draggable by the header strip; a hover-revealed × in the header hides it back to tray.
-- System tray with show/hide toggle, always-on-top toggle, autostart toggle, save-position-on-exit toggle, open-config-file and open-log-file shortcuts.
+- System tray with show/hide toggle, always-on-top toggle, autostart toggle, save-position-on-exit toggle, and an "open config/logs location" shortcut.
 - Color-coded state pills with a pulse animation on WAIT and ERROR.
 - Sticky original-prompt label across approval cycles; same trigger resets the WORK accumulator on a new task.
 - Config hot-reload from `config.json` on the next save — except `server_port`, which requires a restart.
