@@ -1,0 +1,10 @@
+graph LR
+    CC["Claude Code"] -->|"stdin event payload"| Hook["claude_hook.py"]
+    Hook -->|"POST"| Server["http_server<br/>SetPayload"]
+    Server -->|"SetInput"| State["state.rs<br/>AgentSession"]
+    TR["transcript<br/>.jsonl"] -->|"tail"| Watcher["log_watcher<br/>InferredState"]
+    Watcher -->|"merge"| State
+
+    style CC fill:#e1f5ff,stroke:#0369a1
+    style TR fill:#e1f5ff,stroke:#0369a1
+    style State fill:#d4edda,stroke:#047857
