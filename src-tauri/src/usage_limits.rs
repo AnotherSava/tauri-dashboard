@@ -11,7 +11,7 @@ use crate::config::ConfigState;
 #[derive(Clone, Debug, Serialize)]
 pub struct LimitBucket {
     pub utilization: f32,
-    pub resets_at: i64,
+    pub resets_at: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -77,7 +77,7 @@ struct OauthCreds {
 #[derive(Deserialize)]
 struct UsageBucketWire {
     utilization: f32,
-    resets_at: DateTime<Utc>,
+    resets_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -172,7 +172,7 @@ fn to_bucket(wire: UsageBucketWire) -> LimitBucket {
     let normalized = if raw > 1.5 { raw / 100.0 } else { raw };
     LimitBucket {
         utilization: normalized.clamp(0.0, 1.0),
-        resets_at: wire.resets_at.timestamp_millis(),
+        resets_at: wire.resets_at.map(|t| t.timestamp_millis()),
     }
 }
 
@@ -319,17 +319,36 @@ mod tests {
         let expected = DateTime::parse_from_rfc3339("2026-04-20T22:00:00.000+00:00")
             .unwrap()
             .with_timezone(&Utc);
-        assert_eq!(fh.resets_at, expected);
+        assert_eq!(fh.resets_at, Some(expected));
 
         let sd = r.seven_day.unwrap();
         assert!((sd.utilization - 0.18).abs() < 1e-6);
     }
 
     #[test]
+    fn tolerates_null_resets_at() {
+        // Anthropic returns resets_at: null for buckets that have no active
+        // window (typically utilization 0). The whole response must still parse.
+        let bytes = br#"{
+            "five_hour": { "utilization": 0.0, "resets_at": null },
+            "seven_day": { "utilization": 79.0, "resets_at": "2026-04-23T20:59:59.823528+00:00" }
+        }"#;
+        let r: UsageResponse = serde_json::from_slice(bytes).unwrap();
+        let fh = r.five_hour.unwrap();
+        assert_eq!(fh.utilization, 0.0);
+        assert!(fh.resets_at.is_none());
+        let sd = r.seven_day.unwrap();
+        assert!(sd.resets_at.is_some());
+
+        let fh_bucket = to_bucket(fh);
+        assert!(fh_bucket.resets_at.is_none());
+    }
+
+    #[test]
     fn to_bucket_keeps_fraction_scale() {
         let wire = UsageBucketWire {
             utilization: 0.42,
-            resets_at: Utc::now(),
+            resets_at: Some(Utc::now()),
         };
         let b = to_bucket(wire);
         assert!((b.utilization - 0.42).abs() < 1e-6);
@@ -339,7 +358,7 @@ mod tests {
     fn to_bucket_rescales_percentage_scale() {
         let wire = UsageBucketWire {
             utilization: 42.0,
-            resets_at: Utc::now(),
+            resets_at: Some(Utc::now()),
         };
         let b = to_bucket(wire);
         assert!((b.utilization - 0.42).abs() < 1e-6);
@@ -349,7 +368,7 @@ mod tests {
     fn to_bucket_clamps_out_of_range() {
         let wire = UsageBucketWire {
             utilization: 150.0,
-            resets_at: Utc::now(),
+            resets_at: Some(Utc::now()),
         };
         let b = to_bucket(wire);
         assert!((b.utilization - 1.0).abs() < 1e-6);

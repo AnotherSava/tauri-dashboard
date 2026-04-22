@@ -34,7 +34,7 @@ export type UsageStatus = 'ok' | 'unavailable' | 'auth_expired' | 'network_error
 
 export interface LimitBucket {
   utilization: number
-  resets_at: number
+  resets_at: number | null
 }
 
 export interface UsageLimits {

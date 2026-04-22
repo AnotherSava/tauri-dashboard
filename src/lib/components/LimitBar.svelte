@@ -29,7 +29,7 @@
         : 'NO DATA',
   )
   const timeText = $derived(
-    hasData && bucket
+    hasData && bucket && bucket.resets_at !== null
       ? formatCompactRemaining(bucket.resets_at - now, format)
       : formatCompactRemaining(null, format),
   )
@@ -46,7 +46,7 @@
     n: number,
     label: string,
   ): string {
-    const resets = b ? `Resets ${formatResetTime(b.resets_at)}` : null
+    const resets = b && b.resets_at !== null ? `Resets ${formatResetTime(b.resets_at)}` : null
     const lines: string[] = [label]
     if (s === 'unavailable') lines.push('Sign in via Claude Code to enable')
     else if (s === 'auth_expired') lines.push('Token expired — run Claude Code to refresh')
