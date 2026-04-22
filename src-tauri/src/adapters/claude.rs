@@ -1,0 +1,685 @@
+//! Claude Code event adapter.
+//!
+//! Ports the decision logic from `integrations/claude_hook.py` into the app so
+//! the hook can shrink to a thin "forward Claude's payload over HTTP" script.
+//! Behavior is preserved verbatim — the test cases mirror `tests/test_claude_hook.py`.
+
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+use crate::adapters::AdapterOutput;
+use crate::config::Config;
+use crate::state::{SetInput, Status};
+
+/// Translate a Claude Code hook event + payload into an [`AdapterOutput`].
+///
+/// Known events: `UserPromptSubmit`, `Stop`, `SessionStart`, `Notification`,
+/// `SessionEnd`. Unknown events → [`AdapterOutput::Ignore`].
+#[allow(dead_code)]
+pub fn dispatch(event: &str, payload: &Value, cfg: &Config) -> AdapterOutput {
+    let cwd = payload.get("cwd").and_then(|v| v.as_str());
+    let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let projects_root = cfg.projects_root.as_deref();
+    let chat_id = derive_chat_id(cwd, session_id, projects_root);
+
+    if event == "SessionEnd" {
+        return AdapterOutput::Clear { id: chat_id };
+    }
+
+    let Some((status, label)) = classify(event, payload, &cfg.benign_closers) else {
+        return AdapterOutput::Ignore;
+    };
+
+    let transcript_path = payload
+        .get("transcript_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from);
+
+    AdapterOutput::Set {
+        input: SetInput {
+            id: chat_id,
+            status,
+            label,
+            source: Some("claude".into()),
+            model: None,
+            input_tokens: None,
+        },
+        transcript_path,
+    }
+}
+
+/// Derive a friendly `chat_id` from `cwd` relative to `projects_root`.
+///
+/// - cwd under projects_root → relative path with `/`, `-`, `_` replaced by spaces
+/// - cwd outside projects_root or no projects_root → basename of cwd
+/// - no cwd → `claude-<session_id[:8]>` (or `claude-unknown`)
+fn derive_chat_id(cwd: Option<&str>, session_id: &str, projects_root: Option<&str>) -> String {
+    if let Some(cwd) = cwd.map(str::trim).filter(|s| !s.is_empty()) {
+        let normalized = cwd.replace('\\', "/");
+        let normalized = normalized.trim_end_matches('/');
+        if let Some(root) = projects_root.map(str::trim).filter(|s| !s.is_empty()) {
+            let root = root.replace('\\', "/");
+            let root = root.trim_end_matches('/');
+            let prefix = format!("{}/", root);
+            if normalized
+                .to_lowercase()
+                .starts_with(&prefix.to_lowercase())
+            {
+                let rel = &normalized[prefix.len()..];
+                if !rel.is_empty() {
+                    return rel
+                        .chars()
+                        .map(|c| match c {
+                            '/' | '-' | '_' => ' ',
+                            other => other,
+                        })
+                        .collect();
+                }
+            }
+        }
+        let basename = normalized.rsplit('/').next().unwrap_or("");
+        if !basename.is_empty() {
+            return basename.to_string();
+        }
+        return normalized.chars().take(20).collect();
+    }
+    let first_8: String = session_id.trim().chars().take(8).collect();
+    let prefix = if first_8.is_empty() {
+        "unknown".to_string()
+    } else {
+        first_8
+    };
+    format!("claude-{}", prefix)
+}
+
+/// Map event + payload to a (status, optional label) pair.
+///
+/// Returns [`None`] for events we don't recognize (caller should `Ignore`).
+/// Missing/empty `label` in the return tuple means "preserve prior label" in
+/// the state layer.
+fn classify(
+    event: &str,
+    payload: &Value,
+    benign_closers: &[String],
+) -> Option<(Status, Option<String>)> {
+    let transcript_path = payload
+        .get("transcript_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty());
+
+    match event {
+        "UserPromptSubmit" => {
+            let prompt = payload.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+            if prompt.trim().is_empty() {
+                Some((Status::Working, None))
+            } else {
+                Some((Status::Working, Some(clean_prompt(prompt))))
+            }
+        }
+        "Stop" => {
+            if let Some(path) = transcript_path {
+                if last_assistant_ends_with_question(Path::new(path), benign_closers) {
+                    return Some((Status::Awaiting, Some("has a question".into())));
+                }
+            }
+            Some((Status::Done, None))
+        }
+        "Notification" | "SessionStart" => {
+            let notif_type = payload
+                .get("notification_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let message = payload.get("message").and_then(|v| v.as_str()).unwrap_or("");
+
+            if notif_type.is_empty() && message.trim().is_empty() {
+                return Some((Status::Idle, None));
+            }
+            if notif_type == "idle_prompt" {
+                if let Some(path) = transcript_path {
+                    if last_assistant_ends_with_question(Path::new(path), benign_closers) {
+                        return Some((Status::Awaiting, Some("has a question".into())));
+                    }
+                }
+                return Some((Status::Done, None));
+            }
+            let label = notification_label(notif_type, message);
+            let cleaned = clean_prompt(&label);
+            if cleaned.is_empty() {
+                Some((Status::Awaiting, None))
+            } else {
+                // chars — not bytes — so multi-byte glyphs don't split mid-codepoint
+                let truncated: String = cleaned.chars().take(60).collect();
+                Some((Status::Awaiting, Some(truncated)))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn notification_label(notif_type: &str, message: &str) -> String {
+    match notif_type {
+        "permission_prompt" => {
+            let tool = if message.contains("use ") {
+                message.rsplit_once("use ").map(|(_, t)| t).unwrap_or("tool")
+            } else {
+                "tool"
+            };
+            format!("needs approval: {}", tool)
+        }
+        "plan_approval" => "plan approval".into(),
+        _ => message.to_string(),
+    }
+}
+
+/// Normalize whitespace and strip Claude Code's terminal chrome (box-drawing,
+/// block elements, misc technical) so labels read cleanly in the widget.
+fn clean_prompt(text: &str) -> String {
+    let stripped: String = text
+        .chars()
+        .map(|c| match c {
+            '\n' | '\r' | '\t' | '\u{000B}' | '\u{000C}' => ' ',
+            c if (0x2300..0x2400).contains(&(c as u32)) => ' ',
+            c if (0x2500..0x25A0).contains(&(c as u32)) => ' ',
+            c => c,
+        })
+        .collect();
+
+    let mut collapsed = String::with_capacity(stripped.len());
+    let mut prev_space = false;
+    for c in stripped.chars() {
+        if c == ' ' {
+            if !prev_space {
+                collapsed.push(' ');
+            }
+            prev_space = true;
+        } else {
+            collapsed.push(c);
+            prev_space = false;
+        }
+    }
+    collapsed.trim().to_string()
+}
+
+/// Walk the transcript JSONL and return `true` if the latest non-empty
+/// assistant text block ends with `?` and is not a configured benign closer.
+fn last_assistant_ends_with_question(path: &Path, benign_closers: &[String]) -> bool {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let mut last_text = String::new();
+    for line in contents.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(msg) = value.get("message").filter(|v| v.is_object()) else {
+            continue;
+        };
+        if msg.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        match msg.get("content") {
+            Some(Value::String(s)) => {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    last_text = trimmed.to_string();
+                }
+            }
+            Some(Value::Array(blocks)) => {
+                for block in blocks {
+                    if block.get("type").and_then(|v| v.as_str()) != Some("text") {
+                        continue;
+                    }
+                    if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            last_text = trimmed.to_string();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if !last_text.ends_with('?') {
+        return false;
+    }
+    let lower = last_text.to_lowercase();
+    for closer in benign_closers {
+        if closer.is_empty() {
+            continue;
+        }
+        if lower.ends_with(&closer.to_lowercase()) {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+
+    fn cfg_with(projects_root: Option<&str>, benign_closers: &[&str]) -> Config {
+        let mut cfg = Config::default();
+        cfg.projects_root = projects_root.map(str::to_string);
+        cfg.benign_closers = benign_closers.iter().map(|s| s.to_string()).collect();
+        cfg
+    }
+
+    fn write_transcript(lines: &[Value]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ai_agent_dashboard_claude_adapter_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("transcript.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        for v in lines {
+            writeln!(f, "{}", serde_json::to_string(v).unwrap()).unwrap();
+        }
+        path
+    }
+
+    fn assistant_text(text: &str) -> Value {
+        json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}]
+            }
+        })
+    }
+
+    // ----- derive_chat_id -----
+
+    #[test]
+    fn subfolder_of_projects_root_uses_spaced_relpath() {
+        assert_eq!(
+            derive_chat_id(Some("D:/projects/bga/assistant"), "", Some("d:/projects")),
+            "bga assistant"
+        );
+    }
+
+    #[test]
+    fn dashes_and_underscores_become_spaces() {
+        assert_eq!(
+            derive_chat_id(
+                Some("d:/projects/foo-bar/sub_dir/leaf"),
+                "",
+                Some("d:/projects")
+            ),
+            "foo bar sub dir leaf"
+        );
+    }
+
+    #[test]
+    fn root_match_is_case_insensitive() {
+        assert_eq!(
+            derive_chat_id(Some("D:/PROJECTS/thing"), "", Some("d:/projects")),
+            "thing"
+        );
+    }
+
+    #[test]
+    fn backslash_separators_are_normalized() {
+        assert_eq!(
+            derive_chat_id(Some("D:\\projects\\sub\\deep"), "", Some("d:/projects")),
+            "sub deep"
+        );
+    }
+
+    #[test]
+    fn trailing_slash_on_cwd_is_tolerated() {
+        assert_eq!(
+            derive_chat_id(Some("d:/projects/foo-bar/"), "", Some("d:/projects")),
+            "foo bar"
+        );
+    }
+
+    #[test]
+    fn exact_root_falls_back_to_basename() {
+        assert_eq!(
+            derive_chat_id(Some("d:/projects"), "", Some("d:/projects")),
+            "projects"
+        );
+    }
+
+    #[test]
+    fn outside_projects_root_uses_basename() {
+        assert_eq!(
+            derive_chat_id(Some("c:/Users/foo/bar"), "", Some("d:/projects")),
+            "bar"
+        );
+    }
+
+    #[test]
+    fn no_projects_root_uses_basename() {
+        assert_eq!(
+            derive_chat_id(Some("d:/projects/sub/deep"), "", None),
+            "deep"
+        );
+    }
+
+    #[test]
+    fn no_cwd_uses_session_id_prefix() {
+        assert_eq!(
+            derive_chat_id(None, "abcdef1234", Some("d:/projects")),
+            "claude-abcdef12"
+        );
+    }
+
+    #[test]
+    fn no_cwd_and_no_session_returns_unknown() {
+        assert_eq!(
+            derive_chat_id(None, "", Some("d:/projects")),
+            "claude-unknown"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_cwd_treated_as_missing() {
+        assert_eq!(
+            derive_chat_id(Some("   "), "abcdef1234", Some("d:/projects")),
+            "claude-abcdef12"
+        );
+    }
+
+    // ----- clean_prompt -----
+
+    #[test]
+    fn clean_prompt_flattens_multiline_with_single_spaces() {
+        assert_eq!(
+            clean_prompt("first line\nsecond  line\twith\ttabs"),
+            "first line second line with tabs"
+        );
+    }
+
+    #[test]
+    fn clean_prompt_strips_terminal_chrome_glyphs() {
+        assert_eq!(
+            clean_prompt("⎿ Error: │ failed ▌ retry"),
+            "Error: failed retry"
+        );
+    }
+
+    #[test]
+    fn clean_prompt_preserves_legitimate_unicode() {
+        assert_eq!(clean_prompt("café 日本語 🚀 fix"), "café 日本語 🚀 fix");
+    }
+
+    #[test]
+    fn clean_prompt_preserves_length_when_nothing_to_strip() {
+        let prompt = "x".repeat(200);
+        assert_eq!(clean_prompt(&prompt).len(), 200);
+    }
+
+    #[test]
+    fn clean_prompt_empty_string() {
+        assert_eq!(clean_prompt(""), "");
+    }
+
+    #[test]
+    fn clean_prompt_whitespace_only() {
+        assert_eq!(clean_prompt("   \t\n   "), "");
+    }
+
+    // ----- classify: UserPromptSubmit -----
+
+    #[test]
+    fn user_prompt_submit_with_prompt_returns_working_with_cleaned_label() {
+        let p = json!({"prompt": "fix the bug"});
+        let (status, label) = classify("UserPromptSubmit", &p, &[]).unwrap();
+        assert_eq!(status, Status::Working);
+        assert_eq!(label.as_deref(), Some("fix the bug"));
+    }
+
+    #[test]
+    fn user_prompt_submit_with_blank_prompt_returns_working_without_label() {
+        let p = json!({"prompt": "   "});
+        let (status, label) = classify("UserPromptSubmit", &p, &[]).unwrap();
+        assert_eq!(status, Status::Working);
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn user_prompt_submit_missing_prompt_returns_working_without_label() {
+        let p = json!({});
+        let (status, label) = classify("UserPromptSubmit", &p, &[]).unwrap();
+        assert_eq!(status, Status::Working);
+        assert_eq!(label, None);
+    }
+
+    // ----- classify: Stop -----
+
+    #[test]
+    fn stop_without_transcript_is_done() {
+        let (status, label) = classify("Stop", &json!({}), &[]).unwrap();
+        assert_eq!(status, Status::Done);
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn stop_with_question_ending_is_awaiting() {
+        let t = write_transcript(&[assistant_text("Should I proceed?")]);
+        let p = json!({"transcript_path": t.to_string_lossy()});
+        let (status, label) = classify("Stop", &p, &[]).unwrap();
+        assert_eq!(status, Status::Awaiting);
+        assert_eq!(label.as_deref(), Some("has a question"));
+        let _ = std::fs::remove_dir_all(t.parent().unwrap());
+    }
+
+    #[test]
+    fn stop_without_question_ending_is_done() {
+        let t = write_transcript(&[assistant_text("All tests passing.")]);
+        let p = json!({"transcript_path": t.to_string_lossy()});
+        let (status, label) = classify("Stop", &p, &[]).unwrap();
+        assert_eq!(status, Status::Done);
+        assert_eq!(label, None);
+        let _ = std::fs::remove_dir_all(t.parent().unwrap());
+    }
+
+    // ----- classify: Notification -----
+
+    #[test]
+    fn notification_permission_prompt_extracts_tool() {
+        let p = json!({
+            "notification_type": "permission_prompt",
+            "message": "Claude needs your permission to use Bash"
+        });
+        let (status, label) = classify("Notification", &p, &[]).unwrap();
+        assert_eq!(status, Status::Awaiting);
+        assert_eq!(label.as_deref(), Some("needs approval: Bash"));
+    }
+
+    #[test]
+    fn notification_plan_approval_fixed_label() {
+        let p = json!({"notification_type": "plan_approval", "message": "ignored"});
+        let (_, label) = classify("Notification", &p, &[]).unwrap();
+        assert_eq!(label.as_deref(), Some("plan approval"));
+    }
+
+    #[test]
+    fn notification_idle_prompt_with_question_is_awaiting() {
+        let t = write_transcript(&[assistant_text("What would you like me to do next?")]);
+        let p = json!({
+            "notification_type": "idle_prompt",
+            "transcript_path": t.to_string_lossy(),
+        });
+        let (status, label) = classify("Notification", &p, &[]).unwrap();
+        assert_eq!(status, Status::Awaiting);
+        assert_eq!(label.as_deref(), Some("has a question"));
+        let _ = std::fs::remove_dir_all(t.parent().unwrap());
+    }
+
+    #[test]
+    fn notification_idle_prompt_without_question_is_done() {
+        let t = write_transcript(&[assistant_text("All set.")]);
+        let p = json!({
+            "notification_type": "idle_prompt",
+            "transcript_path": t.to_string_lossy(),
+        });
+        let (status, label) = classify("Notification", &p, &[]).unwrap();
+        assert_eq!(status, Status::Done);
+        assert_eq!(label, None);
+        let _ = std::fs::remove_dir_all(t.parent().unwrap());
+    }
+
+    #[test]
+    fn notification_without_type_but_with_message_is_awaiting() {
+        let p = json!({"message": "Claude needs your attention"});
+        let (status, label) = classify("Notification", &p, &[]).unwrap();
+        assert_eq!(status, Status::Awaiting);
+        assert_eq!(label.as_deref(), Some("Claude needs your attention"));
+    }
+
+    #[test]
+    fn notification_label_truncates_to_60_chars() {
+        let p = json!({"notification_type": "attention", "message": "y".repeat(200)});
+        let (_, label) = classify("Notification", &p, &[]).unwrap();
+        assert_eq!(label.unwrap().chars().count(), 60);
+    }
+
+    #[test]
+    fn notification_message_strips_terminal_chrome() {
+        let p = json!({"message": "⎿  Error: pattern blocked"});
+        let (_, label) = classify("Notification", &p, &[]).unwrap();
+        assert_eq!(label.as_deref(), Some("Error: pattern blocked"));
+    }
+
+    // ----- classify: SessionStart -----
+
+    #[test]
+    fn session_start_with_no_fields_is_idle() {
+        let (status, label) = classify("SessionStart", &json!({}), &[]).unwrap();
+        assert_eq!(status, Status::Idle);
+        assert_eq!(label, None);
+    }
+
+    // ----- classify: unknown -----
+
+    #[test]
+    fn unknown_event_returns_none() {
+        assert!(classify("PreToolUse", &json!({}), &[]).is_none());
+    }
+
+    // ----- last_assistant_ends_with_question -----
+
+    #[test]
+    fn missing_file_returns_false() {
+        assert!(!last_assistant_ends_with_question(
+            Path::new("/definitely/missing/transcript.jsonl"),
+            &[]
+        ));
+    }
+
+    #[test]
+    fn skips_user_entries_and_uses_last_assistant() {
+        let path = write_transcript(&[
+            assistant_text("First answer?"),
+            json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "follow"}]}}),
+            assistant_text("Ok, done."),
+        ]);
+        assert!(!last_assistant_ends_with_question(&path, &[]));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn benign_closer_not_treated_as_question() {
+        let closers = vec!["What's next?".to_string()];
+        for text in ["What's next?", "what's next?", "Done. What's next?"] {
+            let path = write_transcript(&[assistant_text(text)]);
+            assert!(
+                !last_assistant_ends_with_question(&path, &closers),
+                "text: {}",
+                text
+            );
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        }
+    }
+
+    #[test]
+    fn non_matching_closer_still_awaits() {
+        let closers = vec!["What's next?".to_string()];
+        let path = write_transcript(&[assistant_text("Which option do you prefer?")]);
+        assert!(last_assistant_ends_with_question(&path, &closers));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn empty_assistant_text_is_ignored_for_latest() {
+        let path = write_transcript(&[assistant_text("Real question?"), assistant_text("   ")]);
+        assert!(last_assistant_ends_with_question(&path, &[]));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn malformed_json_lines_are_skipped() {
+        let dir = std::env::temp_dir().join(format!(
+            "ai_agent_dashboard_claude_adapter_malformed_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("transcript.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "not json").unwrap();
+        writeln!(
+            f,
+            "{}",
+            serde_json::to_string(&assistant_text("Proceed?")).unwrap()
+        )
+        .unwrap();
+        drop(f);
+        assert!(last_assistant_ends_with_question(&path, &[]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ----- dispatch: integration -----
+
+    #[test]
+    fn dispatch_session_end_returns_clear() {
+        let cfg = cfg_with(Some("d:/projects"), &[]);
+        let p = json!({"cwd": "d:/projects/foo"});
+        match dispatch("SessionEnd", &p, &cfg) {
+            AdapterOutput::Clear { id } => assert_eq!(id, "foo"),
+            _ => panic!("expected Clear"),
+        }
+    }
+
+    #[test]
+    fn dispatch_unknown_event_is_ignore() {
+        let cfg = cfg_with(None, &[]);
+        assert!(matches!(
+            dispatch("PreToolUse", &json!({}), &cfg),
+            AdapterOutput::Ignore
+        ));
+    }
+
+    #[test]
+    fn dispatch_user_prompt_submit_produces_set_with_transcript() {
+        let cfg = cfg_with(Some("d:/projects"), &[]);
+        let p = json!({
+            "cwd": "d:/projects/demo",
+            "session_id": "s",
+            "prompt": "fix bug",
+            "transcript_path": "/tmp/t.jsonl"
+        });
+        match dispatch("UserPromptSubmit", &p, &cfg) {
+            AdapterOutput::Set { input, transcript_path } => {
+                assert_eq!(input.id, "demo");
+                assert_eq!(input.status, Status::Working);
+                assert_eq!(input.label.as_deref(), Some("fix bug"));
+                assert_eq!(input.source.as_deref(), Some("claude"));
+                assert_eq!(transcript_path.as_deref(), Some(Path::new("/tmp/t.jsonl")));
+            }
+            _ => panic!("expected Set"),
+        }
+    }
+}

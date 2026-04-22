@@ -1,7 +1,9 @@
+mod adapters;
 mod commands;
 mod config;
 mod config_watcher;
 mod http_server;
+mod label_policy;
 mod log_watcher;
 mod logging;
 mod notifications;

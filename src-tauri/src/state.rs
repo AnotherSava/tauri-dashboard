@@ -64,10 +64,11 @@ impl AppState {
 
             let task_boundary =
                 matches!(prior, Status::Done | Status::Idle) && input.status == Status::Working;
+
+            let (new_label, new_original_prompt) =
+                crate::label_policy::select(Some(&*existing), &input, task_boundary);
+
             if task_boundary {
-                if let Some(ref l) = input.label {
-                    existing.original_prompt = Some(l.clone());
-                }
                 existing.working_accumulated_ms = 0;
             }
 
@@ -76,9 +77,8 @@ impl AppState {
             }
 
             existing.status = input.status;
-            if let Some(l) = input.label {
-                existing.label = l;
-            }
+            existing.label = new_label;
+            existing.original_prompt = new_original_prompt;
             if let Some(src) = input.source {
                 existing.source = src;
             }
@@ -90,12 +90,7 @@ impl AppState {
             }
             existing.updated = now_ms;
         } else {
-            let label = input.label.unwrap_or_default();
-            let original_prompt = if input.status == Status::Working && !label.is_empty() {
-                Some(label.clone())
-            } else {
-                None
-            };
+            let (label, original_prompt) = crate::label_policy::select(None, &input, false);
             sessions.push(AgentSession {
                 id: input.id,
                 status: input.status,
