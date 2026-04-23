@@ -152,7 +152,7 @@
     height: 16px;
     padding: 0 5px;
     background: #2a2a2d;
-    color: #8a8a8e;
+    color: #b9b9bc;
     font-weight: 600;
     white-space: nowrap;
     pointer-events: none;
