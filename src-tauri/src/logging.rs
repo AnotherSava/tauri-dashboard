@@ -9,13 +9,14 @@ pub struct LogGuard(#[allow(dead_code)] WorkerGuard);
 
 pub fn init(log_dir: &Path) -> LogGuard {
     std::fs::create_dir_all(log_dir).ok();
-    let appender = tracing_appender::rolling::never(log_dir, "widget.log");
+    let appender = tracing_appender::rolling::never(log_dir, "widget.jsonl");
     let (writer, guard) = tracing_appender::non_blocking(appender);
 
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,ai_agent_dashboard_lib=debug"));
 
     fmt()
+        .json()
         .with_env_filter(filter)
         .with_writer(writer)
         .with_ansi(false)

@@ -78,7 +78,7 @@ tauri-dashboard/
 │       ├── notifications.rs             1s-tick reconciler + Notifier trait
 │       ├── telegram.rs                  reqwest-based Telegram Bot API client
 │       ├── usage_limits.rs              Anthropic OAuth usage poller (5h / 7d buckets)
-│       └── logging.rs                   tracing subscriber → widget.log
+│       └── logging.rs                   tracing subscriber → widget.jsonl
 ├── integrations/
 │   └── claude_hook.py                   thin Claude Code hook — forwards stdin payload to /api/event
 ├── docs/                                this site
@@ -88,7 +88,7 @@ tauri-dashboard/
 ### Where state lives at runtime
 
 - **In-memory** — `AppState` (sessions) and `ConfigState` (config) via `tauri::State`.
-- **On disk** — `config.json` and `widget.log` under `app_data_dir()`:
+- **On disk** — `config.json` and `widget.jsonl` under `app_data_dir()`:
   - Windows: `%APPDATA%\com.anothersava.ai-agent-dashboard\`
   - macOS: `~/Library/Application Support/com.anothersava.ai-agent-dashboard/`
   - Linux: `$XDG_CONFIG_HOME/com.anothersava.ai-agent-dashboard/` (or `~/.config/...`)
