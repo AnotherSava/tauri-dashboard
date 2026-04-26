@@ -1,9 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
+use tokio::sync::Notify;
 
 use crate::commands::{emit_usage_limits_updated, now_ms};
 use crate::config::ConfigState;
@@ -44,11 +46,27 @@ impl UsageLimits {
 
 pub struct UsageLimitsState {
     inner: RwLock<UsageLimits>,
+    wake: Arc<Notify>,
+    /// Last time we hit the OAuth refresh endpoint. Used to gate refresh
+    /// attempts to one per `REFRESH_COOLDOWN_SECS` so a sequence of failed
+    /// refreshes doesn't hammer Anthropic.
+    last_refresh_attempt: Mutex<Option<Instant>>,
+    /// Set the first time a poll observes an expired access token; cleared
+    /// when a fresh token is observed. The first expired poll only sets
+    /// this and reports auth_expired — refresh is deferred to the next
+    /// poll cycle. Gives Claude Code a chance to refresh on its own first,
+    /// avoiding a race over the rotating refresh_token.
+    saw_expired_last_poll: AtomicBool,
 }
 
 impl UsageLimitsState {
     pub fn new() -> Self {
-        Self { inner: RwLock::new(UsageLimits::empty()) }
+        Self {
+            inner: RwLock::new(UsageLimits::empty()),
+            wake: Arc::new(Notify::new()),
+            last_refresh_attempt: Mutex::new(None),
+            saw_expired_last_poll: AtomicBool::new(false),
+        }
     }
 
     pub fn snapshot(&self) -> UsageLimits {
@@ -57,6 +75,43 @@ impl UsageLimitsState {
 
     fn replace(&self, next: UsageLimits) {
         *self.inner.write().unwrap() = next;
+    }
+
+    /// Ask the poller to run a fresh poll ASAP. Rate-limited: if the last
+    /// poll attempt landed within `MIN_POLL_SECS` we drop the request and
+    /// return `false`, so spam from the frontend can't exceed the Anthropic
+    /// rate-limit floor.
+    pub fn request_refresh(&self) -> bool {
+        let updated = self.snapshot().updated;
+        // Special-case the pre-first-poll state: `updated == 0` means we've
+        // never written a snapshot yet, so `now_ms() - 0` would log a
+        // wall-clock-since-epoch value that looks like a bug.
+        if updated == 0 {
+            tracing::debug!("refresh request granted, waking poller (no prior poll)");
+            self.wake.notify_one();
+            return true;
+        }
+        let age_ms = now_ms() - updated;
+        if age_ms < (MIN_POLL_SECS * 1000) as i64 {
+            tracing::debug!(age_ms, "refresh request denied (inside floor)");
+            return false;
+        }
+        tracing::debug!(age_ms, "refresh request granted, waking poller");
+        self.wake.notify_one();
+        true
+    }
+
+    /// Reserve a refresh-attempt slot if the cooldown has elapsed. Returns
+    /// `true` if the caller should proceed, `false` if we should wait.
+    fn claim_refresh_slot(&self) -> bool {
+        let mut guard = self.last_refresh_attempt.lock().unwrap();
+        let allowed = guard.map_or(true, |t| {
+            t.elapsed() >= Duration::from_secs(REFRESH_COOLDOWN_SECS)
+        });
+        if allowed {
+            *guard = Some(Instant::now());
+        }
+        allowed
     }
 }
 
@@ -70,6 +125,8 @@ struct OauthWrapper {
 struct OauthCreds {
     #[serde(rename = "accessToken")]
     access_token: Option<String>,
+    #[serde(rename = "refreshToken")]
+    refresh_token: Option<String>,
     #[serde(rename = "expiresAt")]
     expires_at: Option<i64>,
 }
@@ -122,6 +179,59 @@ fn read_credentials(path: &Path) -> Result<String, CredsError> {
     Ok(token)
 }
 
+/// Pull only the refresh token out of the credentials file. Returns None
+/// if the file is missing/unparseable or the refresh_token is absent or
+/// blank. Used by the OAuth refresh flow when the access token expires.
+fn read_refresh_token(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let wrapper: OauthWrapper = serde_json::from_slice(&bytes).ok()?;
+    wrapper
+        .claude_ai_oauth?
+        .refresh_token
+        .filter(|t| !t.trim().is_empty())
+}
+
+/// Update accessToken / refreshToken / expiresAt in-place while preserving
+/// every other field in the credentials file (scopes, subscriptionType,
+/// rateLimitTier, etc.). Atomic via temp-file + rename.
+fn write_credentials(
+    path: &Path,
+    access_token: &str,
+    refresh_token: &str,
+    expires_at: i64,
+) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(path)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&existing).unwrap_or_else(|_| serde_json::json!({}));
+
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    let root = value.as_object_mut().unwrap();
+    let oauth_entry = root
+        .entry("claudeAiOauth")
+        .or_insert_with(|| serde_json::json!({}));
+    if !oauth_entry.is_object() {
+        *oauth_entry = serde_json::json!({});
+    }
+    let oauth = oauth_entry.as_object_mut().unwrap();
+    oauth.insert(
+        "accessToken".into(),
+        serde_json::Value::String(access_token.into()),
+    );
+    oauth.insert(
+        "refreshToken".into(),
+        serde_json::Value::String(refresh_token.into()),
+    );
+    oauth.insert("expiresAt".into(), serde_json::Value::from(expires_at));
+
+    let serialized = serde_json::to_string_pretty(&value)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serialized.as_bytes())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 // dead_code lint doesn't see Debug-derived reads; fields are consumed via `?err`.
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -165,13 +275,15 @@ async fn fetch_usage(
 }
 
 fn to_bucket(wire: UsageBucketWire) -> LimitBucket {
-    // Anthropic's OAuth usage endpoint has historically returned either a
-    // 0.0..1.0 fraction or a 0.0..100.0 percentage depending on deployment
-    // state. Normalize to 0.0..1.0 before clamping so the UI is consistent.
-    let raw = wire.utilization;
-    let normalized = if raw > 1.5 { raw / 100.0 } else { raw };
+    // Anthropic returns utilization as a 0..100 percentage. The previous
+    // "if raw > 1.5 treat as percentage, else fraction" heuristic was meant
+    // to defend against an older API shape that returned 0..1 fractions,
+    // but it actively misinterpreted real low percentages: a value of 1.0
+    // (= 1%) was treated as the fraction 1.0 (= 100%) and the bar showed
+    // full red. Always divide by 100; if Anthropic ever flips back to
+    // fractions we'll see ~0% bars and revisit.
     LimitBucket {
-        utilization: normalized.clamp(0.0, 1.0),
+        utilization: (wire.utilization / 100.0).clamp(0.0, 1.0),
         resets_at: wire.resets_at.map(|t| t.timestamp_millis()),
     }
 }
@@ -189,13 +301,120 @@ impl UsageLimitsPoller {
             loop {
                 poll_once(&app, &client).await;
                 let secs = poll_interval_seconds(&app);
-                tokio::time::sleep(Duration::from_secs(secs)).await;
+                let wake = app
+                    .try_state::<UsageLimitsState>()
+                    .map(|s| s.wake.clone());
+                match wake {
+                    Some(wake) => tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(secs)) => {},
+                        _ = wake.notified() => {},
+                    },
+                    None => tokio::time::sleep(Duration::from_secs(secs)).await,
+                }
             }
         });
     }
 }
 
-const MIN_POLL_SECS: u64 = 60;
+pub const MIN_POLL_SECS: u64 = 60;
+const REFRESH_COOLDOWN_SECS: u64 = 300;
+/// OAuth token endpoint and Claude Code's hardcoded client_id, both used
+/// when Claude Code itself refreshes. Discovered via the `claude-code-sdk`
+/// gist; if Anthropic ever rotates the client_id we'll need to update this.
+const OAUTH_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
+const CLAUDE_CODE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+
+#[derive(Deserialize)]
+struct OauthRefreshResponse {
+    access_token: String,
+    refresh_token: String,
+    expires_in: u64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+enum RefreshError {
+    NoRefreshToken,
+    Network(String),
+    HttpStatus(reqwest::StatusCode, String),
+    JsonParse(String),
+    FileWrite(String),
+}
+
+/// Call Anthropic's OAuth token endpoint with the stored refresh_token,
+/// then write the rotated token pair back to .credentials.json. Returns
+/// the new access token on success.
+///
+/// Note: Claude Code may refresh concurrently using the same refresh_token.
+/// Whichever client calls second gets a 4xx and we return Err — the next
+/// poll cycle will re-read the credentials file (now updated by Claude
+/// Code's successful refresh) and proceed normally.
+async fn do_oauth_refresh(
+    client: &reqwest::Client,
+    creds_path: &Path,
+) -> Result<String, RefreshError> {
+    let refresh_token = read_refresh_token(creds_path).ok_or(RefreshError::NoRefreshToken)?;
+    let body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": CLAUDE_CODE_CLIENT_ID,
+    });
+    let resp = client
+        .post(OAUTH_TOKEN_URL)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| RefreshError::Network(e.to_string()))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let snippet: String = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(200)
+            .collect();
+        return Err(RefreshError::HttpStatus(status, snippet));
+    }
+    let parsed: OauthRefreshResponse = resp
+        .json()
+        .await
+        .map_err(|e| RefreshError::JsonParse(e.to_string()))?;
+    let new_expires_at = now_ms() + (parsed.expires_in as i64) * 1000;
+    write_credentials(
+        creds_path,
+        &parsed.access_token,
+        &parsed.refresh_token,
+        new_expires_at,
+    )
+    .map_err(|e| RefreshError::FileWrite(e.to_string()))?;
+    Ok(parsed.access_token)
+}
+
+/// Cooldown-gated wrapper around `do_oauth_refresh`. Returns the new
+/// access token on success, or None if the cooldown is active or the
+/// refresh failed.
+async fn try_refresh_token(
+    state: &UsageLimitsState,
+    client: &reqwest::Client,
+    path: &Path,
+) -> Option<String> {
+    if !state.claim_refresh_slot() {
+        tracing::debug!("token refresh skipped (cooldown active)");
+        return None;
+    }
+    tracing::info!("auth expired; calling OAuth refresh endpoint");
+    match do_oauth_refresh(client, path).await {
+        Ok(t) => {
+            tracing::info!("token refresh succeeded");
+            Some(t)
+        }
+        Err(e) => {
+            tracing::warn!(?e, "token refresh failed");
+            None
+        }
+    }
+}
 
 fn poll_interval_seconds(app: &AppHandle) -> u64 {
     app.try_state::<ConfigState>()
@@ -221,8 +440,12 @@ async fn poll_once(app: &AppHandle, client: &reqwest::Client) {
     };
 
     let token = match read_credentials(&path) {
-        Ok(t) => t,
+        Ok(t) => {
+            state.saw_expired_last_poll.store(false, Ordering::SeqCst);
+            t
+        }
         Err(CredsError::Missing | CredsError::Unreadable) => {
+            state.saw_expired_last_poll.store(false, Ordering::SeqCst);
             state.replace(UsageLimits {
                 five_hour: None,
                 seven_day: None,
@@ -233,18 +456,57 @@ async fn poll_once(app: &AppHandle, client: &reqwest::Client) {
             return;
         }
         Err(CredsError::Expired) => {
-            state.replace(UsageLimits {
-                five_hour: None,
-                seven_day: None,
-                status: UsageStatus::AuthExpired,
-                updated: now,
-            });
-            emit_usage_limits_updated(app);
-            return;
+            // Defer the first expired sighting to give Claude Code a poll
+            // cycle to refresh on its own — avoids racing the rotating
+            // refresh_token. Exception: on cold start (no successful poll
+            // ever) refresh immediately — the user just launched and we
+            // can't make them stare at empty bars for a full poll cycle.
+            let was_expired_last = state
+                .saw_expired_last_poll
+                .swap(true, Ordering::SeqCst);
+            let is_cold_start = previous.updated == 0;
+            if !was_expired_last && !is_cold_start {
+                // Steady-state defer: keep the previous snapshot visible
+                // (no replace, no emit) so the user sees no transient
+                // disturbance. Next poll will refresh ourselves if CC
+                // hasn't done so by then.
+                tracing::debug!(
+                    "token expired; deferring refresh, keeping previous snapshot"
+                );
+                return;
+            }
+            // Either cold start, or this is the second consecutive expired
+            // poll. Hit the OAuth endpoint with the stored refresh_token.
+            // On failure fall through to AuthExpired so the user knows.
+            match try_refresh_token(&state, client, &path).await {
+                Some(t) => {
+                    state.saw_expired_last_poll.store(false, Ordering::SeqCst);
+                    t
+                }
+                None => {
+                    state.replace(UsageLimits {
+                        five_hour: None,
+                        seven_day: None,
+                        status: UsageStatus::AuthExpired,
+                        updated: now,
+                    });
+                    emit_usage_limits_updated(app);
+                    return;
+                }
+            }
         }
     };
 
-    match fetch_usage(client, &token).await {
+    let mut result = fetch_usage(client, &token).await;
+    if matches!(result, Err(PollError::Auth(_))) {
+        // Server rejected even though our local expiresAt said the token
+        // was fresh — try a forced refresh and retry once.
+        if let Some(new_token) = try_refresh_token(&state, client, &path).await {
+            result = fetch_usage(client, &new_token).await;
+        }
+    }
+
+    match result {
         Ok(usage) => {
             tracing::debug!(
                 five_hour_raw = ?usage.five_hour.as_ref().map(|b| b.utilization),
@@ -308,6 +570,28 @@ mod tests {
     }
 
     #[test]
+    fn request_refresh_respects_min_poll_floor() {
+        let state = UsageLimitsState::new();
+        // Seed updated 30s ago — inside the 60s floor; refresh is dropped.
+        state.replace(UsageLimits {
+            five_hour: None,
+            seven_day: None,
+            status: UsageStatus::Ok,
+            updated: now_ms() - 30_000,
+        });
+        assert!(!state.request_refresh());
+
+        // Seed updated 61s ago — outside the floor; refresh wakes the poller.
+        state.replace(UsageLimits {
+            five_hour: None,
+            seven_day: None,
+            status: UsageStatus::Ok,
+            updated: now_ms() - 61_000,
+        });
+        assert!(state.request_refresh());
+    }
+
+    #[test]
     fn deserializes_usage_response() {
         let bytes = br#"{
             "five_hour":  { "utilization": 0.42, "resets_at": "2026-04-20T22:00:00.000+00:00" },
@@ -345,16 +629,6 @@ mod tests {
     }
 
     #[test]
-    fn to_bucket_keeps_fraction_scale() {
-        let wire = UsageBucketWire {
-            utilization: 0.42,
-            resets_at: Some(Utc::now()),
-        };
-        let b = to_bucket(wire);
-        assert!((b.utilization - 0.42).abs() < 1e-6);
-    }
-
-    #[test]
     fn to_bucket_rescales_percentage_scale() {
         let wire = UsageBucketWire {
             utilization: 42.0,
@@ -362,6 +636,15 @@ mod tests {
         };
         let b = to_bucket(wire);
         assert!((b.utilization - 0.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn to_bucket_handles_low_percentages() {
+        // Regression: a raw value of 1.0 means 1%, not 100%. The old
+        // "fraction vs percentage" heuristic mistook this for a fraction.
+        let wire = UsageBucketWire { utilization: 1.0, resets_at: None };
+        let b = to_bucket(wire);
+        assert!((b.utilization - 0.01).abs() < 1e-6);
     }
 
     #[test]
@@ -418,6 +701,62 @@ mod tests {
         .unwrap();
         drop(f);
         assert_eq!(read_credentials(&path).unwrap(), "tok");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_credentials_preserves_unrelated_fields() {
+        let dir = std::env::temp_dir().join(format!(
+            "ai_agent_dashboard_usage_test_write_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".credentials.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "claudeAiOauth": {
+                "accessToken": "old",
+                "refreshToken": "old_r",
+                "expiresAt": 1,
+                "scopes": ["a", "b"],
+                "subscriptionType": "max"
+              },
+              "otherTopLevel": 42
+            }"#,
+        )
+        .unwrap();
+
+        write_credentials(&path, "new_a", "new_r", 9_999_999_999_999).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let oauth = written.get("claudeAiOauth").unwrap();
+        assert_eq!(oauth.get("accessToken").unwrap(), "new_a");
+        assert_eq!(oauth.get("refreshToken").unwrap(), "new_r");
+        assert_eq!(oauth.get("expiresAt").unwrap(), 9_999_999_999_999i64);
+        // Untouched fields survive.
+        assert_eq!(oauth.get("scopes").unwrap(), &serde_json::json!(["a", "b"]));
+        assert_eq!(oauth.get("subscriptionType").unwrap(), "max");
+        assert_eq!(written.get("otherTopLevel").unwrap(), 42);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_refresh_token_extracts_when_present() {
+        let dir = std::env::temp_dir().join(format!(
+            "ai_agent_dashboard_usage_test_refresh_read_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".credentials.json");
+        std::fs::write(
+            &path,
+            r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r-123","expiresAt":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(read_refresh_token(&path).as_deref(), Some("r-123"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
