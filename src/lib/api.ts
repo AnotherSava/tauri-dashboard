@@ -14,6 +14,22 @@ export function getUsageLimits(): Promise<UsageLimits> {
   return invoke<UsageLimits>('get_usage_limits')
 }
 
+export function refreshUsageLimits(): Promise<boolean> {
+  return invoke<boolean>('refresh_usage_limits')
+}
+
+export function applyAutoResize(height: number): Promise<void> {
+  return invoke('apply_auto_resize', { height })
+}
+
+export function frontendLog(
+  level: 'trace' | 'debug' | 'info' | 'warn' | 'error',
+  message: string,
+  data: Record<string, unknown> = {},
+): Promise<void> {
+  return invoke('frontend_log', { level, message, data })
+}
+
 export function hideWindow(): Promise<void> {
   return invoke('hide_window')
 }

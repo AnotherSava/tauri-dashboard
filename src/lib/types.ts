@@ -18,6 +18,8 @@ export interface ContextBarThreshold {
   color: string
 }
 
+export type AutoResize = 'none' | 'up' | 'down'
+
 export interface Config {
   server_port: number
   always_on_top: boolean
@@ -28,6 +30,7 @@ export interface Config {
   benign_closers: string[]
   usage_limits_poll_interval_seconds: number
   limit_bar_segments: number
+  auto_resize: AutoResize
 }
 
 export type UsageStatus = 'ok' | 'unavailable' | 'auth_expired' | 'network_error'

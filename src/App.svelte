@@ -3,6 +3,8 @@
   import SessionList from './lib/components/SessionList.svelte'
   import LimitBar from './lib/components/LimitBar.svelte'
   import {
+    applyAutoResize,
+    frontendLog,
     getConfig,
     getSessions,
     getUsageLimits,
@@ -10,6 +12,7 @@
     onConfigUpdated,
     onSessionsUpdated,
     onUsageLimitsUpdated,
+    refreshUsageLimits,
     showWindow,
   } from './lib/api'
   import type { AgentSession, Config, UsageLimits } from './lib/types'
@@ -18,6 +21,51 @@
   let config = $state<Config | null>(null)
   let usage = $state<UsageLimits | null>(null)
   let now = $state(Date.now())
+
+  let widgetEl: HTMLDivElement | undefined = $state()
+  let lastSentHeight = -1
+  let measureTimer: ReturnType<typeof setTimeout> | null = null
+
+  function scheduleMeasure() {
+    if (measureTimer !== null) clearTimeout(measureTimer)
+    measureTimer = setTimeout(measureAndSend, 50)
+  }
+
+  function measureAndSend() {
+    measureTimer = null
+    if (!widgetEl || !config || config.auto_resize === 'none') return
+    const headerEl = widgetEl.querySelector('header') as HTMLElement | null
+    if (!headerEl) return
+    // Walk the SessionList's natural content height ourselves rather than
+    // reading `.list.scrollHeight`: the list has `flex: 1; min-height: 0`, so
+    // when the window is currently larger than its content, it stretches to
+    // fill the viewport and `scrollHeight` reports the stretched size, not
+    // the intrinsic content size — locking us at whatever height we last set.
+    let listH = 0
+    const list = widgetEl.querySelector('.list')
+    if (list) {
+      for (const child of list.children) {
+        listH += (child as HTMLElement).offsetHeight
+      }
+    } else if (widgetEl.querySelector('.empty')) {
+      listH = 36
+    }
+    const desired = headerEl.offsetHeight + listH
+    if (Math.abs(desired - lastSentHeight) < 1) return
+    lastSentHeight = desired
+    applyAutoResize(desired).catch((err) => console.error('apply_auto_resize failed', err))
+  }
+
+  // Re-measure whenever something that affects content height could have
+  // changed: session list contents, limit bar visibility, or the mode itself.
+  // The dedup in measureAndSend prevents feedback loops from the resulting
+  // window resize.
+  $effect(() => {
+    sessions
+    usage
+    config?.auto_resize
+    scheduleMeasure()
+  })
 
   onMount(() => {
     let unlistenSessions: (() => void) | undefined
@@ -29,9 +77,29 @@
         config = await getConfig()
         sessions = await getSessions()
         usage = await getUsageLimits()
-        unlistenSessions = await onSessionsUpdated((s) => (sessions = s))
+        frontendLog('trace', 'mount snapshot', {
+          five_hour_present: usage?.five_hour != null,
+          seven_day_present: usage?.seven_day != null,
+          status: usage?.status,
+        }).catch(() => {})
+        unlistenSessions = await onSessionsUpdated((s) => {
+          frontendLog('trace', 'event sessions_updated', { sessions: s.length }).catch(() => {})
+          sessions = s
+        })
         unlistenConfig = await onConfigUpdated((c) => (config = c))
-        unlistenUsage = await onUsageLimitsUpdated((u) => (usage = u))
+        unlistenUsage = await onUsageLimitsUpdated((u) => {
+          frontendLog('trace', 'event usage_limits_updated', {
+            five_hour_present: u.five_hour != null,
+            seven_day_present: u.seven_day != null,
+            status: u.status,
+          }).catch(() => {})
+          usage = u
+        })
+        // Unconditional refresh on mount — if the webview was discarded by OS
+        // power-saving and reloaded while the process was suspended, the
+        // cached snapshot may be stale. The 60s floor inside the backend
+        // protects Anthropic from thrash on real reloads.
+        refreshUsageLimits().catch((err) => console.error('mount refresh failed', err))
       } catch (err) {
         console.error('failed to initialize', err)
       } finally {
@@ -46,11 +114,23 @@
 
     const tickId = setInterval(() => (now = Date.now()), 1000)
 
+    // Wake the backend poller when the user brings the widget back to the
+    // foreground — the process may have been suspended by OS power management
+    // while occluded, leaving the bars showing a snapshot from hours ago.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshUsageLimits().catch((err) => console.error('refresh failed', err))
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
       clearInterval(tickId)
+      document.removeEventListener('visibilitychange', onVisibility)
       unlistenSessions?.()
       unlistenConfig?.()
       unlistenUsage?.()
+      if (measureTimer !== null) clearTimeout(measureTimer)
     }
   })
 
@@ -59,7 +139,7 @@
   }
 </script>
 
-<div class="widget">
+<div class="widget" bind:this={widgetEl}>
   <header data-tauri-drag-region>
     <span class="title" data-tauri-drag-region>AI AGENTS</span>
     <div class="limits" data-tauri-drag-region>

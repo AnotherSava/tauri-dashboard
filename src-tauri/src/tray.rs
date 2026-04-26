@@ -1,5 +1,5 @@
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, SubmenuBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Wry,
 };
@@ -7,12 +7,15 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 use crate::commands::emit_config_updated;
-use crate::config::ConfigState;
+use crate::config::{AutoResize, ConfigState};
 
 const MENU_SHOW_HIDE: &str = "show_hide";
 const MENU_ALWAYS_ON_TOP: &str = "always_on_top";
 const MENU_SAVE_POSITION: &str = "save_position";
 const MENU_AUTOSTART: &str = "autostart";
+const MENU_AUTO_RESIZE_NONE: &str = "auto_resize_none";
+const MENU_AUTO_RESIZE_UP: &str = "auto_resize_up";
+const MENU_AUTO_RESIZE_DOWN: &str = "auto_resize_down";
 const MENU_OPEN_DATA_DIR: &str = "open_data_dir";
 const MENU_ABOUT: &str = "about";
 const MENU_QUIT: &str = "quit";
@@ -23,18 +26,21 @@ pub struct TrayHandles {
     pub always_on_top: CheckMenuItem<Wry>,
     pub save_position: CheckMenuItem<Wry>,
     pub autostart: CheckMenuItem<Wry>,
+    pub auto_resize_none: CheckMenuItem<Wry>,
+    pub auto_resize_up: CheckMenuItem<Wry>,
+    pub auto_resize_down: CheckMenuItem<Wry>,
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let show_hide = MenuItem::with_id(app, MENU_SHOW_HIDE, "Show / Hide", true, None::<&str>)?;
 
-    let (aot_initial, save_pos_initial) = app
+    let (aot_initial, save_pos_initial, auto_resize_initial) = app
         .try_state::<ConfigState>()
         .map(|s| {
             let c = s.snapshot();
-            (c.always_on_top, c.save_window_position)
+            (c.always_on_top, c.save_window_position, c.auto_resize)
         })
-        .unwrap_or((true, false));
+        .unwrap_or((true, false, AutoResize::None));
     let always_on_top = CheckMenuItem::with_id(
         app, MENU_ALWAYS_ON_TOP, "Always on top", true, aot_initial, None::<&str>,
     )?;
@@ -48,6 +54,22 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         app, MENU_AUTOSTART, "Open on system start", true, autostart_initial, None::<&str>,
     )?;
 
+    let auto_resize_none = CheckMenuItem::with_id(
+        app, MENU_AUTO_RESIZE_NONE, "None", true,
+        auto_resize_initial == AutoResize::None, None::<&str>,
+    )?;
+    let auto_resize_up = CheckMenuItem::with_id(
+        app, MENU_AUTO_RESIZE_UP, "Up", true,
+        auto_resize_initial == AutoResize::Up, None::<&str>,
+    )?;
+    let auto_resize_down = CheckMenuItem::with_id(
+        app, MENU_AUTO_RESIZE_DOWN, "Down", true,
+        auto_resize_initial == AutoResize::Down, None::<&str>,
+    )?;
+    let auto_resize_submenu = SubmenuBuilder::new(app, "Auto resize")
+        .items(&[&auto_resize_none, &auto_resize_up, &auto_resize_down])
+        .build()?;
+
     let open_data_dir = MenuItem::with_id(app, MENU_OPEN_DATA_DIR, "Open config/logs location", true, None::<&str>)?;
     let about = MenuItem::with_id(app, MENU_ABOUT, "About", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
@@ -60,6 +82,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             &always_on_top,
             &save_position,
             &autostart,
+            &auto_resize_submenu,
             &PredefinedMenuItem::separator(app)?,
             &open_data_dir,
             &PredefinedMenuItem::separator(app)?,
@@ -72,6 +95,9 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         always_on_top: always_on_top.clone(),
         save_position: save_position.clone(),
         autostart: autostart.clone(),
+        auto_resize_none: auto_resize_none.clone(),
+        auto_resize_up: auto_resize_up.clone(),
+        auto_resize_down: auto_resize_down.clone(),
     });
 
     let icon = app
@@ -108,6 +134,9 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         MENU_ALWAYS_ON_TOP => toggle_always_on_top(app),
         MENU_SAVE_POSITION => toggle_save_position(app),
         MENU_AUTOSTART => toggle_autostart(app),
+        MENU_AUTO_RESIZE_NONE => select_auto_resize_mode(app, AutoResize::None),
+        MENU_AUTO_RESIZE_UP => select_auto_resize_mode(app, AutoResize::Up),
+        MENU_AUTO_RESIZE_DOWN => select_auto_resize_mode(app, AutoResize::Down),
         MENU_OPEN_DATA_DIR => open_data_dir(app),
         MENU_ABOUT => show_about(app),
         MENU_QUIT => app.exit(0),
@@ -154,6 +183,39 @@ fn toggle_save_position(app: &AppHandle) {
         let _ = handles.save_position.set_checked(new_state);
     }
     emit_config_updated(app);
+}
+
+fn select_auto_resize_mode(app: &AppHandle, mode: AutoResize) {
+    let Some(state) = app.try_state::<ConfigState>() else {
+        return;
+    };
+    if state.snapshot().auto_resize == mode {
+        // Re-clicking the active option: keep it checked, no work to do.
+        sync_auto_resize_checks(app, mode);
+        return;
+    }
+    state.with_mut(|c| c.auto_resize = mode);
+    let _ = state.save_to_disk();
+    sync_auto_resize_checks(app, mode);
+    // For Up/Down, the frontend $effect drives the snap with a freshly
+    // measured height. For None, the frontend early-returns and never
+    // invokes apply, so we have to clear the prior mode's min/max
+    // constraints from here or the window stays height-locked forever.
+    if matches!(mode, AutoResize::None) {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = crate::auto_resize::apply(&window, AutoResize::None, 0.0);
+        }
+    }
+    emit_config_updated(app);
+}
+
+fn sync_auto_resize_checks(app: &AppHandle, mode: AutoResize) {
+    let Some(handles) = app.try_state::<TrayHandles>() else {
+        return;
+    };
+    let _ = handles.auto_resize_none.set_checked(mode == AutoResize::None);
+    let _ = handles.auto_resize_up.set_checked(mode == AutoResize::Up);
+    let _ = handles.auto_resize_down.set_checked(mode == AutoResize::Down);
 }
 
 fn toggle_autostart(app: &AppHandle) {

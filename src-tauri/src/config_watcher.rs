@@ -1,4 +1,4 @@
-use crate::config::{Config, ConfigState};
+use crate::config::{AutoResize, Config, ConfigState};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -94,6 +94,10 @@ pub fn apply_config_to_window(app: &AppHandle, cfg: &Config, prior: Option<&Conf
         if let Some(pos) = cfg.window_position {
             let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
         }
+    }
+    let prior_auto = prior.map(|p| p.auto_resize);
+    if prior_auto != Some(cfg.auto_resize) && matches!(cfg.auto_resize, AutoResize::None) {
+        let _ = crate::auto_resize::apply(&window, AutoResize::None, 0.0);
     }
 }
 

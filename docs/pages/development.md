@@ -72,13 +72,18 @@ tauri-dashboard/
 │       ├── config.rs                    Config struct, load/save, ConfigState wrapper
 │       ├── config_watcher.rs            notify watcher for config.json hot-reload
 │       ├── commands.rs                  Tauri commands + event emitters
-│       ├── http_server.rs               axum routes for POST /api/status
+│       ├── http_server.rs               axum routes for POST /api/event
 │       ├── log_watcher.rs               per-session transcript tailing + infer_state
 │       ├── tray.rs                      TrayIconBuilder, menu handlers, autostart
 │       ├── notifications.rs             1s-tick reconciler + Notifier trait
 │       ├── telegram.rs                  reqwest-based Telegram Bot API client
-│       ├── usage_limits.rs              Anthropic OAuth usage poller (5h / 7d buckets)
-│       └── logging.rs                   tracing subscriber → widget.jsonl
+│       ├── usage_limits.rs              Anthropic OAuth usage poller + refresh (5h / 7d buckets)
+│       ├── auto_resize.rs               Up/Down content-fit window + Win32 resize lock + dark class brush
+│       ├── label_policy.rs              shared (label, original_prompt) decision used by adapters
+│       ├── adapters.rs                  adapter dispatch for /api/event payloads
+│       ├── adapters/
+│       │   └── claude.rs                Claude Code lifecycle classifier + chat-id derivation
+│       └── logging.rs                   tracing subscriber → widget.jsonl + FrontendLogger for IPC log lines
 ├── integrations/
 │   └── claude_hook.py                   thin Claude Code hook — forwards stdin payload to /api/event
 ├── docs/                                this site

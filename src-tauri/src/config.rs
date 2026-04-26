@@ -30,6 +30,19 @@ pub struct Config {
     /// fit the available track width; higher values give finer resolution but
     /// thinner individual segments.
     pub limit_bar_segments: u32,
+    /// Auto-resize the window to fit content height. When set to Up, the
+    /// bottom edge stays put and the window grows upward; Down keeps the top
+    /// edge fixed; None leaves the window manually sized.
+    pub auto_resize: AutoResize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoResize {
+    #[default]
+    None,
+    Up,
+    Down,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -106,6 +119,7 @@ impl Default for Config {
             notifications: Some(NotificationsConfig::default()),
             usage_limits_poll_interval_seconds: 600,
             limit_bar_segments: 16,
+            auto_resize: AutoResize::None,
         }
     }
 }
@@ -207,6 +221,20 @@ mod tests {
         let tg = cfg.notifications.unwrap().telegram.unwrap();
         assert!(tg.bot_token.is_none());
         assert_eq!(tg.state_thresholds_ms.get("awaiting"), Some(&60_000));
+    }
+
+    #[test]
+    fn auto_resize_defaults_to_none_when_field_missing() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.auto_resize, AutoResize::None);
+    }
+
+    #[test]
+    fn auto_resize_parses_snake_case() {
+        let up: Config = serde_json::from_str(r#"{ "auto_resize": "up" }"#).unwrap();
+        assert_eq!(up.auto_resize, AutoResize::Up);
+        let down: Config = serde_json::from_str(r#"{ "auto_resize": "down" }"#).unwrap();
+        assert_eq!(down.auto_resize, AutoResize::Down);
     }
 
     #[test]

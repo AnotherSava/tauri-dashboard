@@ -1,4 +1,5 @@
 mod adapters;
+mod auto_resize;
 mod commands;
 mod config;
 mod config_watcher;
@@ -32,6 +33,9 @@ pub fn run() {
             commands::get_sessions,
             commands::get_config,
             commands::get_usage_limits,
+            commands::refresh_usage_limits,
+            commands::apply_auto_resize,
+            commands::frontend_log,
             commands::hide_window,
             commands::show_window,
             commands::toggle_window,
@@ -45,8 +49,9 @@ pub fn run() {
             let app_data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data).ok();
 
-            let log_guard = logging::init(&app_data);
+            let (log_guard, frontend_logger) = logging::init(&app_data);
             app.manage(log_guard);
+            app.manage(frontend_logger);
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "widget starting");
 
             let config_path = app_data.join("config.json");
@@ -72,6 +77,15 @@ pub fn run() {
                         config_watcher::apply_default_position(&window);
                     }
                 }
+                // Install the WM_NCHITTEST + WM_NCLBUTTONDOWN subclass.
+                // Lock is inactive until apply() flips it on, so this is a
+                // no-op until the user picks an Up/Down mode.
+                auto_resize::install_resize_lock(&window);
+                // Force the window class's background brush to the dark
+                // theme color, so growing the window via left/right resize
+                // doesn't paint a brief flash of white before the webview
+                // renders into the new area.
+                auto_resize::set_dark_window_background(&window);
 
                 // Safety net: if the frontend never calls `show_window`
                 // (broken JS, slow webview), reveal the window anyway.
@@ -99,8 +113,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                save_window_position_if_enabled(window);
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    save_window_position_if_enabled(window);
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

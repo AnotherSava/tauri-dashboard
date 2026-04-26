@@ -21,6 +21,38 @@ pub fn get_usage_limits(state: State<UsageLimitsState>) -> UsageLimits {
 }
 
 #[tauri::command]
+pub fn refresh_usage_limits(state: State<UsageLimitsState>) -> bool {
+    state.request_refresh()
+}
+
+#[tauri::command]
+pub fn apply_auto_resize(height: f64, app: AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let mode = app
+        .try_state::<ConfigState>()
+        .map(|s| s.snapshot().auto_resize)
+        .unwrap_or_default();
+    if let Err(e) = crate::auto_resize::apply(&window, mode, height) {
+        tracing::warn!(?e, height, "apply_auto_resize failed");
+    }
+}
+
+/// Diagnostic ping from the frontend — writes a single JSONL line to
+/// widget.jsonl in the same envelope shape as backend tracing events. See
+/// `logging::FrontendLogger` for why this bypasses the tracing macros.
+#[tauri::command]
+pub fn frontend_log(
+    level: String,
+    message: String,
+    data: serde_json::Value,
+    logger: State<crate::logging::FrontendLogger>,
+) {
+    logger.log(&level, &message, data);
+}
+
+#[tauri::command]
 pub fn hide_window(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
 }
