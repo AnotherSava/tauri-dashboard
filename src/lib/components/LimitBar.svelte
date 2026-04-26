@@ -29,9 +29,13 @@
         : 'NO DATA',
   )
   const timeText = $derived(
-    hasData && bucket && bucket.resets_at !== null
-      ? formatCompactRemaining(bucket.resets_at - now, format)
-      : formatCompactRemaining(null, format),
+    !hasData || !bucket
+      ? formatCompactRemaining(null, format)
+      : bucket.resets_at === null
+        ? status === 'ok'
+          ? 'IDLE'
+          : formatCompactRemaining(null, format)
+        : formatCompactRemaining(bucket.resets_at - now, format),
   )
   const fillColor = $derived(
     utilization >= 0.85 ? '#b91c1c' : utilization >= 0.5 ? '#b45309' : '#047857',
@@ -53,8 +57,8 @@
     else if (s === 'network_error') {
       if (resets) lines.push(resets)
       lines.push(`Anthropic API unreachable — last try ${formatAgo(n - u)}`)
-    } else if (s === 'ok' && b && resets) {
-      lines.push(resets, `updated ${formatAgo(n - u)}`)
+    } else if (s === 'ok' && b) {
+      lines.push(resets ?? 'No active window', `updated ${formatAgo(n - u)}`)
     }
     return lines.join('\n')
   }
